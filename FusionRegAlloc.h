@@ -5,9 +5,14 @@
 #include "llvm/CodeGen/RegAllocRegistry.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "llvm/Target/TargetInstrInfo.h"
+#include "llvm/Target/TargetSubtargetInfo.h"
+
+using namespace llvm;
+
 //Verify functions of the LiveRangeEdit delegate
 
-using namespace llvm {
+namespace {
     class FusionRegAlloc : public MachineFunctionPass,
                            public RegAllocBase,
                            private LiveRangeEdit::Delegate { //Baseado no RAGreedy
@@ -15,10 +20,14 @@ using namespace llvm {
         //Context
         MachineFunction *MF;
 
+        //State
+        std::unique_ptr<Spiller> SpillerInstance;
+
         //Useful Interfaces
         const TargetInstrInfo *TII;
-        const TargetRegisterInfo *TRI;
-        RegisterClassInfo RCI;
+        //Present in RegAllocBase - needed to remove?
+        const TargetRegisterInfo *TRI;     
+        RegisterClassInfo RCI;              //Provides dynamic information about target register classes
 
         public:
             static char ID;
@@ -31,11 +40,10 @@ using namespace llvm {
             virtual void releaseMemory();
             virtual Spiller &spiller();
             virtual void enqueue(LiveInterval *LI);
-            virtual LiveInterval *dequeue();
+            virtual LiveInterval* dequeue();
             virtual unsigned selectOrSplit(LiveInterval&, SmallVectorImpl<unsigned>&);
             virtual void aboutToRemoveInterval(LiveInterval &);
              
-            // Perform register allocation.
             virtual bool runOnMachineFunction(MachineFunction &mf); 
     };
 }
