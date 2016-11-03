@@ -8,43 +8,56 @@
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
 
+#include "Interference.h"
+
 using namespace llvm;
 
 //Verify functions of the LiveRangeEdit delegate
 
 namespace {
     class FusionRegAlloc : public MachineFunctionPass,
-                           public RegAllocBase,
-                           private LiveRangeEdit::Delegate { //Baseado no RAGreedy
-       
+                           public RegAllocBase { 
+
+        // Interference Graph Implementation
+        typedef std::list<INode> InterferenceGraph;
+
         //Context
         MachineFunction *MF;
 
         //State
         std::unique_ptr<Spiller> SpillerInstance;
+        InterferenceGraph IGraph;
 
         //Useful Interfaces
-        const TargetInstrInfo *TII;
+        //const TargetInstrInfo *TII;
         //Present in RegAllocBase - needed to remove?
-        const TargetRegisterInfo *TRI;     
-        RegisterClassInfo RCI;              //Provides dynamic information about target register classes
+        //const TargetRegisterInfo *TRI;     
+        //RegisterClassInfo RCI;              //Provides dynamic information about target register classes
 
         public:
             static char ID;
 
             FusionRegAlloc();
 
-            virtual const char *getPassName() const;
+            virtual const char* getPassName() const;
+            virtual void getAnalysisUsage(AnalysisUsage&) const;
+
+            virtual bool runOnMachineFunction(MachineFunction&); 
             
-            virtual void getAnalysisUsage(AnalysisUsage &AU) const;
+            //Interface base 
             virtual void releaseMemory();
-            virtual Spiller &spiller();
-            virtual void enqueue(LiveInterval *LI);
+            virtual Spiller& spiller();
+            virtual void enqueue(LiveInterval*);
             virtual LiveInterval* dequeue();
             virtual unsigned selectOrSplit(LiveInterval&, SmallVectorImpl<unsigned>&);
-            virtual void aboutToRemoveInterval(LiveInterval &);
+            virtual void aboutToRemoveInterval(LiveInterval&);
              
-            virtual bool runOnMachineFunction(MachineFunction &mf); 
+        private:
+            void buildGraph();
+            void removeNodeFromGraph(INode*);
+
+            // Return a Free register - not sure
+            unsigned getFreeReg(const LiveInterval* LI);
     };
 }
 

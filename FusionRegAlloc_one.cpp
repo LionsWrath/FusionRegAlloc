@@ -40,15 +40,19 @@ void FusionRegAlloc::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 //Interface functions - Some missing
-void releaseMemory() {
+void FusionRegAlloc::releaseMemory() {
     SpillerInstance.reset();
 }
 
-Spiller &spiller() { return *SpillerInstance; }
+Spiller &FusionRegAlloc::spiller() { return *SpillerInstance; }
 
-unsigned selectOrSplit(LiveInterval &VirtReg, SmallVectorImpl<unsigned> &splitLRVs) {}
+void FusionRegAlloc::enqueue(LiveInterval* li) { return; }
 
-bool runOnMachineFunction(MachineFunction &mf) {
+LiveInterval* FusionRegAlloc::dequeue() { return nullptr; }
+
+unsigned FusionRegAlloc::selectOrSplit(LiveInterval &VirtReg, SmallVectorImpl<unsigned> &splitLRVs) {}
+
+bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
     //Initialize Variables
     MF = &mf;
 
