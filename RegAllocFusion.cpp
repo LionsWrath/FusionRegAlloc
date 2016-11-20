@@ -1,3 +1,27 @@
+//===-------- RegAllocFusion.cpp - Fusion Based Register Allocator * C++ -*-===//
+//
+//                  Put names and shit like that here
+//
+//===----------------------------------------------------------------------===//
+//
+// This file contains the Fusion Register Allocator.
+//
+//  TODO:
+//      - Verify region formation with Basic Blocks in mind
+//          - Get CFG ( Basic Blocks as Region )
+//          - Order EDGES ( Priotity List )
+//          - Create a Interference Graph for each region
+//      - Check how many live ranges must be spilled within each region
+//      - Graph Fusion
+//          - Begin Fusing the graphs in the EDGE order
+//          - Always maintain the simplificability
+//          - Return an unique Interference Graph
+//      - Color Assignment
+//          - Choose a technique?
+//      - Code Insertion
+//
+//===----------------------------------------------------------------------===//
+
 #include "llvm/Pass.h"
 #include "llvm/PassAnalysisSupport.h"
 
@@ -98,7 +122,7 @@ public:
 
     // Print the interval related to this node
     void print(std::ostream& Out) const {
-        Out << "Node :: ";
+        Out << "Node :: "; // Check LiveInterval printing
     }
 };
 
