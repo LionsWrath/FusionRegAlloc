@@ -2,6 +2,7 @@
 #include "llvm/PassAnalysisSupport.h"
 
 #include "llvm/CodeGen/RegAllocRegistry.h"
+#include "llvm/CodeGen/LiveInterval.h"
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
 #include "llvm/CodeGen/LiveRangeEdit.h"
 #include "llvm/CodeGen/LiveRegMatrix.h"
@@ -97,7 +98,7 @@ public:
 
     // Print the interval related to this node
     void print(std::ostream& Out) const {
-        Out << "Node :: " << *LI;
+        Out << "Node :: ";
     }
 };
 
@@ -135,18 +136,18 @@ class FusionRegAlloc : public MachineFunctionPass,
         FusionRegAlloc();
 
         //Override - Mudar tudo aqui
-        virtual const char* getPassName() const;
-        virtual void getAnalysisUsage(AnalysisUsage&) const;
+        const char* getPassName() const override;
+        void getAnalysisUsage(AnalysisUsage&) const override;
 
-        virtual bool runOnMachineFunction(MachineFunction&) = 0; 
+        bool runOnMachineFunction(MachineFunction&) override; 
         
         //Interface base 
-        virtual void releaseMemory();
-        virtual Spiller& spiller();
-        virtual void enqueue(LiveInterval*);
-        virtual LiveInterval* dequeue();
-        virtual unsigned selectOrSplit(LiveInterval&, SmallVectorImpl<unsigned>&);
-        virtual void aboutToRemoveInterval(LiveInterval&);
+        void releaseMemory() override;
+        Spiller& spiller() override;
+        void enqueue(LiveInterval*) override;
+        LiveInterval* dequeue() override;
+        unsigned selectOrSplit(LiveInterval&, SmallVectorImpl<unsigned>&) override;
+        void aboutToRemoveInterval(LiveInterval&) override;
          
     private:
         void buildGraph();
@@ -160,7 +161,7 @@ class FusionRegAlloc : public MachineFunctionPass,
 
 char FusionRegAlloc::ID = 0;
 
-FunctionPass* llvm::createFusionRegisterAllocator() {
+FunctionPass* createFusionRegisterAllocator() {
     return new FusionRegAlloc();
 }
 
@@ -209,7 +210,7 @@ void FusionRegAlloc::enqueue(LiveInterval* li) { return; }
 
 LiveInterval* FusionRegAlloc::dequeue() { return nullptr; }
 
-unsigned FusionRegAlloc::selectOrSplit(LiveInterval &VirtReg, SmallVectorImpl<unsigned> &splitLRVs) {}
+unsigned FusionRegAlloc::selectOrSplit(LiveInterval &VirtReg, SmallVectorImpl<unsigned> &splitLRVs) { return 0U;}
 
 bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
     //Initialize Variables
