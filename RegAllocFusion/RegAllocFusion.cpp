@@ -23,7 +23,7 @@
 //  Classes to take a look:
 //      - LiveRangeCalc.h       -> Compute Live Ranges from scratch
 //      - LiveRangeAnalysis.h
-//      - SplitKit.h
+//      - SplitKit.h            -> calcLiveBlockInfo
 //      - MachineBasicBlock.h
 //===----------------------------------------------------------------------===//
 
@@ -45,6 +45,7 @@
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/BranchProbability.h"
 
 #include "/home/lionswrath/llvm/lib/CodeGen/Spiller.h"
 #include "/home/lionswrath/llvm/lib/CodeGen/RegAllocBase.h"
@@ -55,6 +56,7 @@
 
 #include <set>
 #include <memory>
+#include <queue>
 
 using namespace llvm;
 
@@ -125,12 +127,12 @@ public:
     }
 
     // Print the interval related to this node
-    void print(std::ostream& Out) const {
-        Out << "Node :: "; // Check LiveInterval printing
+    void print(raw_ostream& Out) const {
+        Out << "Node :: " << LI; // Check LiveInterval printing
     }
 };
 
-std::ostream& operator<< (std::ostream& Out, const INode& N) {
+raw_ostream& operator<< (raw_ostream& Out, const INode& N) {
     N.print(Out);
     return Out;
 }
@@ -144,11 +146,14 @@ class RNode {
     typedef std::list<INode> InterferenceGraph;
     typedef std::set<RNode*> RegionNeighborList; // Change set later - Successors
 
+    int Number;
+
     InterferenceGraph IGraph;
     RegionNeighborList RNeighbors;
 
+    //RNode();
 public:
-    RNode() {}
+    RNode(int N) : Number(N) {}
     
     // Iterators
     typedef RegionNeighborList::iterator iterator;
@@ -183,13 +188,21 @@ public:
        return unsigned(RNeighbors.size()); 
     }
 
+    unsigned getNumber() const {
+        return unsigned(Number);
+    }
+
     // Print the interval related to this node
-    void print(std::ostream& Out) const {
-        Out << "Region Node :: "; // Check LiveInterval printing
+    void print(raw_ostream& Out) const {
+        Out << "Region Number :  " << Number << '\n';
+        
+        for (auto it = RNeighbors.begin(); it != RNeighbors.end(); it++) {
+            Out << "    Edge: " << (*it)->getNumber() << '\n';
+        }
     }
 };
 
-std::ostream& operator<< (std::ostream& Out, const RNode& N) {
+raw_ostream& operator<< (raw_ostream& Out, const RNode& N) {
     N.print(Out);
     return Out;
 }
@@ -201,11 +214,40 @@ std::ostream& operator<< (std::ostream& Out, const RNode& N) {
 class FusionRegAlloc : public MachineFunctionPass,
                        public RegAllocBase { 
 
-    typedef std::list<INode> RegionGraph;
+    typedef std::vector<RNode*> RegionGraph;
+    typedef std::vector<MachineBasicBlock*> MachineBasicBlockList;
+    
+    MachineFunction *MF;
+    LiveIntervals* LIS;
+    VirtRegMap* VRM;
+
+    std::unique_ptr<Spiller> SpillerInstance;
     
     RegionGraph RGraph;
-    MachineFunction *MF;
-    std::unique_ptr<Spiller> SpillerInstance;
+    MachineBasicBlockList MBBList;
+
+    // Priority Queue Implementation
+    struct Edge {
+        RNode *src, *dst;
+        BranchProbability weight;
+
+        Edge(RNode *s, RNode * d, BranchProbability w): src(s), dst(d), weight(w) {}
+
+        //float getWeight() { return weight; }
+        //void setWeight(float w) { weight = w; }
+
+        bool operator<(const Edge &e) const {
+            return weight < e.weight;
+        }
+    };
+
+    struct CompEdges {
+        bool operator() (Edge *A, Edge *B) const {
+            return A < B;
+        }
+    };
+
+    std::priority_queue<Edge*, std::vector<Edge*>, CompEdges> Queue;
 
     public:
         static char ID;
@@ -228,10 +270,11 @@ class FusionRegAlloc : public MachineFunctionPass,
          
     private:
         void buildRegionGraph();
-        //void removeNodeFromGraph(INode*);
-
-        // Return a Free register - not sure
-        //unsigned getFreeReg(const LiveInterval* LI);
+        void linkSuccessors();
+        void sortEdges();
+        void addRegion(MachineBasicBlock*);
+        RNode* getRegion(int);
+        void printRegionGraph(raw_ostream&);
 };
 
 //------------------------------------------------------------------Implementation
@@ -251,8 +294,8 @@ static RegisterRegAlloc FusionRegAlloc("fusion",
 //Constructor
 FusionRegAlloc::FusionRegAlloc() : MachineFunctionPass(ID) {
     //Interface needed
-    //initializeLiveIntervalsPass(*PassRegistry::getPassRegistry());
-    //initializeVirtRegMapPass(*PassRegistry::getPassRegistry());
+    initializeLiveIntervalsPass(*PassRegistry::getPassRegistry());
+    initializeVirtRegMapPass(*PassRegistry::getPassRegistry());
     //initializeLiveRegMatrixPass(*PassRegistry::getPassRegistry());
 }
 
@@ -266,10 +309,10 @@ void FusionRegAlloc::getAnalysisUsage(AnalysisUsage &AU) const {
     AU.setPreservesCFG();
     
     //Interface needed
-    //AU.addRequired<LiveIntervals>();
-    //AU.addPreserved<LiveIntervals>();
-    //AU.addRequired<VirtRegMap>();
-    //AU.addPreserved<VirtRegMap>();
+    AU.addRequired<LiveIntervals>();
+    AU.addPreserved<LiveIntervals>();
+    AU.addRequired<VirtRegMap>();
+    AU.addPreserved<VirtRegMap>();
     //AU.addRequired<LiveRegMatrix>();
     //AU.addPreserved<LiveRegMatrix>();
     
@@ -292,12 +335,58 @@ void FusionRegAlloc::aboutToRemoveInterval(LiveInterval &LI) { return; }
 
 //----------------------------------------------------------------- Region Graph
 
+void FusionRegAlloc::printRegionGraph(raw_ostream& Out) {
+    
+    for (auto it = RGraph.begin(); it != RGraph.end(); it++) {
+        RNode *node = *it;
+
+        node->print(Out);
+    }
+}
+
+void FusionRegAlloc::addRegion(MachineBasicBlock* MBB) {
+    RNode *node = new RNode(MBB->getNumber());
+
+    RGraph.push_back(node);
+    MBBList.push_back(MBB);
+}
+
+RNode* FusionRegAlloc::getRegion(int Number) {
+
+    for (auto it = RGraph.begin(); it != RGraph.end(); it++) {
+        RNode *actual = *it;
+        if (actual->getNumber() == Number) return actual; 
+    }
+}
+
 void FusionRegAlloc::buildRegionGraph() {
     RGraph.clear();
 
     for (MachineFunction::iterator it = MF->begin(); it != MF->end(); it++) {
-        (*it).print(outs());
+        MachineBasicBlock *MBB = &(*it);
+        MBB->print(outs());
+
+        addRegion(MBB);
     }
+
+    linkSuccessors();
+}
+
+void FusionRegAlloc::linkSuccessors() {
+
+    for (int i=0; i<MBBList.size(); i++) {
+        MachineBasicBlock *MBB = MBBList[i];
+        for (auto it = MBB->succ_begin(); it != MBB->succ_end(); it++) {
+            MachineBasicBlock *SUC = *it;
+            RNode *node = getRegion(SUC->getNumber());
+
+            RGraph[i]->addNeighbor(node);
+        }
+    }
+}
+
+void FusionRegAlloc::sortEdges() {
+    
 }
 
 //------------------------------------------------------------------------------
@@ -305,13 +394,11 @@ void FusionRegAlloc::buildRegionGraph() {
 bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
     //Initialize Variables
     MF = &mf;
-
-    //Not sure if needed
-    //TII = MF->getSubtarget().getInstrInfo();
-    //TRI = MF->getSubtarget().getRegisterInfo();
-    //RCI.runOnMachineFunction(mf);
+    LIS = &getAnalysis<LiveIntervals>(); 
+    VRM = &getAnalysis<VirtRegMap>();
 
     buildRegionGraph();
+    printRegionGraph(outs());
 
     //Initialize Interface
     //RegAllocBase::init(getAnalysis<VirtRegMap>(),
@@ -321,6 +408,6 @@ bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
     //allocatePhysRegs(); //Interface that calls seedLiveRegs
     
     //Clean memory and return changed
-    //releaseMemory();
+    releaseMemory();
     return true;
 }
