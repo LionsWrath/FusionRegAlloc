@@ -54,6 +54,7 @@
 #include "llvm/Target/TargetSubtargetInfo.h"
 
 #include <set>
+#include <memory>
 
 using namespace llvm;
 
@@ -141,7 +142,7 @@ std::ostream& operator<< (std::ostream& Out, const INode& N) {
 class RNode {    
     // Interference Graph Implementation
     typedef std::list<INode> InterferenceGraph;
-    typedef std::set<RNode*> RegionNeighborList; // Change set later
+    typedef std::set<RNode*> RegionNeighborList; // Change set later - Successors
 
     InterferenceGraph IGraph;
     RegionNeighborList RNeighbors;
@@ -188,6 +189,11 @@ public:
     }
 };
 
+std::ostream& operator<< (std::ostream& Out, const RNode& N) {
+    N.print(Out);
+    return Out;
+}
+
 ///-------------------------///
 ///      FusionRegAlloc     ///
 ///-------------------------///
@@ -196,19 +202,10 @@ class FusionRegAlloc : public MachineFunctionPass,
                        public RegAllocBase { 
 
     typedef std::list<INode> RegionGraph;
+    
     RegionGraph RGraph;
-
-    //Context
     MachineFunction *MF;
-
-    //State
     std::unique_ptr<Spiller> SpillerInstance;
-
-    //Useful Interfaces
-    //const TargetInstrInfo *TII;
-    //Present in RegAllocBase - needed to remove?
-    //const TargetRegisterInfo *TRI;     
-    //RegisterClassInfo RCI;              //Provides dynamic information about target register classes
 
     public:
         static char ID;
@@ -234,7 +231,7 @@ class FusionRegAlloc : public MachineFunctionPass,
         //void removeNodeFromGraph(INode*);
 
         // Return a Free register - not sure
-        unsigned getFreeReg(const LiveInterval* LI);
+        //unsigned getFreeReg(const LiveInterval* LI);
 };
 
 //------------------------------------------------------------------Implementation
@@ -254,9 +251,9 @@ static RegisterRegAlloc FusionRegAlloc("fusion",
 //Constructor
 FusionRegAlloc::FusionRegAlloc() : MachineFunctionPass(ID) {
     //Interface needed
-    initializeLiveIntervalsPass(*PassRegistry::getPassRegistry());
-    initializeVirtRegMapPass(*PassRegistry::getPassRegistry());
-    initializeLiveRegMatrixPass(*PassRegistry::getPassRegistry());
+    //initializeLiveIntervalsPass(*PassRegistry::getPassRegistry());
+    //initializeVirtRegMapPass(*PassRegistry::getPassRegistry());
+    //initializeLiveRegMatrixPass(*PassRegistry::getPassRegistry());
 }
 
 //Return the Pass Name
@@ -269,20 +266,19 @@ void FusionRegAlloc::getAnalysisUsage(AnalysisUsage &AU) const {
     AU.setPreservesCFG();
     
     //Interface needed
-    AU.addRequired<LiveIntervals>();
-    AU.addPreserved<LiveIntervals>();
-    AU.addRequired<VirtRegMap>();
-    AU.addPreserved<VirtRegMap>();
-    AU.addRequired<LiveRegMatrix>();
-    AU.addPreserved<LiveRegMatrix>();
+    //AU.addRequired<LiveIntervals>();
+    //AU.addPreserved<LiveIntervals>();
+    //AU.addRequired<VirtRegMap>();
+    //AU.addPreserved<VirtRegMap>();
+    //AU.addRequired<LiveRegMatrix>();
+    //AU.addPreserved<LiveRegMatrix>();
     
     MachineFunctionPass::getAnalysisUsage(AU);
 }
 
 //Interface functions - Some missing
-void FusionRegAlloc::releaseMemory() {
-    SpillerInstance.reset();
-}
+
+void FusionRegAlloc::releaseMemory() { SpillerInstance.reset(); }
 
 Spiller &FusionRegAlloc::spiller() { return *SpillerInstance; }
 
@@ -292,10 +288,13 @@ LiveInterval* FusionRegAlloc::dequeue() { return nullptr; }
 
 unsigned FusionRegAlloc::selectOrSplit(LiveInterval &VirtReg, SmallVectorImpl<unsigned> &splitLRVs) { return 0U;}
 
+void FusionRegAlloc::aboutToRemoveInterval(LiveInterval &LI) { return; }
+
 //----------------------------------------------------------------- Region Graph
 
 void FusionRegAlloc::buildRegionGraph() {
-    
+    RGraph.clear();
+
     for (MachineFunction::iterator it = MF->begin(); it != MF->end(); it++) {
         (*it).print(outs());
     }
@@ -315,12 +314,13 @@ bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
     buildRegionGraph();
 
     //Initialize Interface
-    RegAllocBase::init(getAnalysis<VirtRegMap>(),
-                       getAnalysis<LiveIntervals>(),
-                       getAnalysis<LiveRegMatrix>());
+    //RegAllocBase::init(getAnalysis<VirtRegMap>(),
+    //                   getAnalysis<LiveIntervals>(),
+    //                   getAnalysis<LiveRegMatrix>());
    
-    allocatePhysRegs(); //Interface that calls seedLiveRegs
+    //allocatePhysRegs(); //Interface that calls seedLiveRegs
+    
     //Clean memory and return changed
-    releaseMemory();
+    //releaseMemory();
     return true;
 }
