@@ -46,9 +46,9 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "Spiller.h"
-#include "RegAllocBase.h"
-#include "LiveDebugVariables.h"
+#include "/home/lionswrath/llvm/lib/CodeGen/Spiller.h"
+#include "/home/lionswrath/llvm/lib/CodeGen/RegAllocBase.h"
+#include "/home/lionswrath/llvm/lib/CodeGen/LiveDebugVariables.h"
 
 #include "llvm/Target/TargetInstrInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
@@ -245,7 +245,7 @@ FunctionPass* createFusionRegisterAllocator() {
     return new FusionRegAlloc();
 }
 
-static RegisterRegAlloc FusionRegAlloc("fusionregalloc", 
+static RegisterRegAlloc FusionRegAlloc("fusion", 
         "Fusion Based Register Allocation", createFusionRegisterAllocator);
 
 
