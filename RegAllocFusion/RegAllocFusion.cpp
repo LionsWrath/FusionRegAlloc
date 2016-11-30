@@ -36,6 +36,7 @@
 #include "llvm/CodeGen/LiveRegMatrix.h"
 #include "llvm/CodeGen/LiveStackAnalysis.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
+#include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
@@ -239,6 +240,11 @@ class FusionRegAlloc : public MachineFunctionPass,
         bool operator<(const Edge &e) const {
             return weight < e.weight;
         }
+
+        void print(raw_ostream &Out) const {
+            Out << "RNode#" << src->getNumber() << " -> RNode#" << dst->getNumber();
+            Out << "\n    -> " << weight << '\n';
+        }
     };
 
     struct CompEdges {
@@ -357,6 +363,8 @@ RNode* FusionRegAlloc::getRegion(int Number) {
         RNode *actual = *it;
         if (actual->getNumber() == Number) return actual; 
     }
+
+    return nullptr;
 }
 
 void FusionRegAlloc::buildRegionGraph() {
@@ -386,7 +394,21 @@ void FusionRegAlloc::linkSuccessors() {
 }
 
 void FusionRegAlloc::sortEdges() {
+    MachineBranchProbabilityInfo MBPI;    
     
+    for (int i=0; i<MBBList.size(); i++) {
+        MachineBasicBlock *MBB = MBBList[i];
+        for (auto it = MBB->succ_begin(); it != MBB->succ_end(); it++) {
+            MachineBasicBlock *SUC = *it;
+
+            BranchProbability BP = MBPI.getEdgeProbability(MBB, it);
+            Edge *e = new Edge(RGraph[i], getRegion(SUC->getNumber()), BP);
+        
+            e->print(outs());
+
+            Queue.push(e);
+        }
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -398,6 +420,7 @@ bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
     VRM = &getAnalysis<VirtRegMap>();
 
     buildRegionGraph();
+    sortEdges();
     printRegionGraph(outs());
 
     //Initialize Interface
