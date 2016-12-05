@@ -34,6 +34,7 @@
 #include "llvm/CodeGen/LiveIntervalAnalysis.h"
 #include "llvm/CodeGen/LiveRangeEdit.h"
 #include "llvm/CodeGen/LiveRegMatrix.h"
+#include "llvm/CodeGen/LiveVariables.h"
 #include "llvm/CodeGen/LiveStackAnalysis.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
 #include "llvm/CodeGen/MachineBranchProbabilityInfo.h"
@@ -58,6 +59,7 @@
 #include <set>
 #include <memory>
 #include <queue>
+#include <tuple>
 
 using namespace llvm;
 
@@ -193,12 +195,62 @@ public:
         return unsigned(Number);
     }
 
+    // Line 154 of LiveInterval - Check LiveRange Segments of LiveInterval
+    void constructRegionLI(LiveIntervals &LIS, const MachineRegisterInfo &MRI) {
+        SlotIndex Start, Stop, Begin, End;
+        std::tie(Start, Stop) = LIS.getSlotIndexes()->getMBBRange(Number);
+
+        outs() << "[ " << Start << ", " << Stop << " ]" << '\n';
+        for (unsigned i=0, e = MRI.getNumVirtRegs(); i != e; ++i) {
+            unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
+            if (MRI.reg_nodbg_empty(Reg))
+                continue;
+
+            const LiveInterval *LI = &LIS.getInterval(Reg);
+            //LiveInterval &NewLI = LIS.createEmptyInterval(Reg);
+
+            //outs() << NewLI;
+            for (auto it = LI->begin(); it != LI->end(); it++) {
+                Begin = (*it).start;
+                End = (*it).end;
+                
+                if (Begin >= Start && End <= Stop) {
+                    outs() << "All in: \n";
+                    outs() << "     ------------------------------------------" << '\n';
+                    outs() << "     Register: " << Reg << "\n     " << *LI << '\n';
+                    outs() << "     ------------------------------------------" << '\n';
+                }
+
+                if (Begin >= Start && End >= Stop && Begin <= Stop) {
+                    outs() << "Begin in block and Continue: \n";
+                    outs() << "     ------------------------------------------" << '\n';
+                    outs() << "     Register: " << Reg << "\n     " << *LI << '\n';
+                    outs() << "     ------------------------------------------" << '\n';
+                }
+
+                if (Begin <= Start && End <= Stop && End >= Start) {
+                    outs() << "Come into the block and ends: \n";
+                    outs() << "     ------------------------------------------" << '\n';
+                    outs() << "     Register: " << Reg << "\n     " << *LI << '\n';
+                    outs() << "     ------------------------------------------" << '\n';
+                }
+
+                if (Begin <= Start && End >= Stop) {
+                    outs() << "Live-Throught: \n";
+                    outs() << "     ------------------------------------------" << '\n';
+                    outs() << "     Register: " << Reg << "\n     " << *LI << '\n';
+                    outs() << "     ------------------------------------------" << '\n';
+                }
+            }
+        }
+    }
+
     // Print the interval related to this node
     void print(raw_ostream& Out) const {
-        Out << "Region Number :  " << Number << '\n';
+        Out << "    RNode#" << Number << '\n';
         
         for (auto it = RNeighbors.begin(); it != RNeighbors.end(); it++) {
-            Out << "    Edge: " << (*it)->getNumber() << '\n';
+            Out << "        -> RNode#" << (*it)->getNumber() << '\n';
         }
     }
 };
@@ -219,8 +271,9 @@ class FusionRegAlloc : public MachineFunctionPass,
     typedef std::vector<MachineBasicBlock*> MachineBasicBlockList;
     
     MachineFunction *MF;
-    LiveIntervals* LIS;
-    VirtRegMap* VRM;
+    LiveIntervals *LIS;
+    VirtRegMap *VRM;
+    LiveVariables *LVS; 
 
     std::unique_ptr<Spiller> SpillerInstance;
     
@@ -241,9 +294,13 @@ class FusionRegAlloc : public MachineFunctionPass,
             return weight < e.weight;
         }
 
+        bool operator>(const Edge &e) const {
+            return weight > e.weight;
+        }
+
         void print(raw_ostream &Out) const {
             Out << "RNode#" << src->getNumber() << " -> RNode#" << dst->getNumber();
-            Out << "\n    -> " << weight << '\n';
+            Out << "\n    Weight: " << weight << '\n';
         }
     };
 
@@ -280,6 +337,7 @@ class FusionRegAlloc : public MachineFunctionPass,
         void sortEdges();
         void addRegion(MachineBasicBlock*);
         RNode* getRegion(int);
+        MachineBasicBlock* getMBB(int);
         void printRegionGraph(raw_ostream&);
 };
 
@@ -302,7 +360,6 @@ FusionRegAlloc::FusionRegAlloc() : MachineFunctionPass(ID) {
     //Interface needed
     initializeLiveIntervalsPass(*PassRegistry::getPassRegistry());
     initializeVirtRegMapPass(*PassRegistry::getPassRegistry());
-    //initializeLiveRegMatrixPass(*PassRegistry::getPassRegistry());
 }
 
 //Return the Pass Name
@@ -319,8 +376,6 @@ void FusionRegAlloc::getAnalysisUsage(AnalysisUsage &AU) const {
     AU.addPreserved<LiveIntervals>();
     AU.addRequired<VirtRegMap>();
     AU.addPreserved<VirtRegMap>();
-    //AU.addRequired<LiveRegMatrix>();
-    //AU.addPreserved<LiveRegMatrix>();
     
     MachineFunctionPass::getAnalysisUsage(AU);
 }
@@ -342,11 +397,15 @@ void FusionRegAlloc::aboutToRemoveInterval(LiveInterval &LI) { return; }
 //----------------------------------------------------------------- Region Graph
 
 void FusionRegAlloc::printRegionGraph(raw_ostream& Out) {
-    
+    Out << "\nRegion Graph:\n";
+
     for (auto it = RGraph.begin(); it != RGraph.end(); it++) {
         RNode *node = *it;
 
         node->print(Out);
+        
+        MachineRegisterInfo &MRI = MF->getRegInfo();
+        node->constructRegionLI(*LIS, MRI);
     }
 }
 
@@ -367,12 +426,21 @@ RNode* FusionRegAlloc::getRegion(int Number) {
     return nullptr;
 }
 
+MachineBasicBlock* FusionRegAlloc::getMBB(int Number) {
+    for (auto it = MBBList.begin(); it != MBBList.end(); it++) {
+        MachineBasicBlock *MBB = *it;
+        if (MBB->getNumber() == Number) return MBB; 
+    }
+
+    return nullptr;
+}
+
 void FusionRegAlloc::buildRegionGraph() {
     RGraph.clear();
 
     for (MachineFunction::iterator it = MF->begin(); it != MF->end(); it++) {
         MachineBasicBlock *MBB = &(*it);
-        MBB->print(outs());
+        //MBB->print(outs());
 
         addRegion(MBB);
     }
