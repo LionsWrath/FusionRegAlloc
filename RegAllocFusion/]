@@ -132,37 +132,10 @@ public:
         segments.push_back(GoldenSegment(s,e)); 
     }
 
-    bool overlapFrom(GoldenSegment &LGS, GoldenSegment &RGS) {
-        if (LGS.start < RGS.end) {
-            if (LGS.end > RGS.end) {
-                return true;
-            } else {
-                if (RGS.start < LGS.end) {
-                    return true;
-                } else return false;
-            }
-        } else {
-            if (LGS.end < RGS.end) {
-                return true;
-            } else {
-                if (LGS.start < RGS.end) {
-                    return true;
-                } else return false;
-            }
-        }
-    }
-
     bool overlaps(GoldenInterval Other) {
         if (Other.isEmpty()) return false;
 
-        bool interferes = false;
-        for (GoldenSegment seg : segments) {
-            for (auto it = Other.begin(); it != Other.end(); it++) {
-                interferes |= overlapFrom(seg, *it); 
-            }
-        }
-
-        return interferes;
+        //Implementation missing
     }
 
     void print(raw_ostream& Out) const {
@@ -184,6 +157,7 @@ class INode { // Interference Node
     INode();
 
 public:
+    //INode(LiveInterval* li) : LI(li) {}
     INode(GoldenInterval* gi) : GI(gi) {}
 
 
@@ -399,6 +373,8 @@ public:
                 } 
             }
         }
+
+        //Conflicts with physical registers
     }
 
     // Print the interval related to this node
@@ -415,11 +391,7 @@ public:
         }
         Out << "        Interference Graph: " << IGraph.size() << "\n";
         for (auto it = IGraph.begin(); it != IGraph.end(); it++) {
-            Out << "            INode :: Reg " << (*it).getColor() << " -> ";
-            for (auto ti = (*it).begin(); ti != (*it).end(); ti++) {
-                Out << (*(*ti)).getColor() << ", ";
-            }
-            Out << "\n";
+            Out << "            INode :: Reg " << (*it).getColor() <<"\n";
         }
     }
 };
