@@ -54,16 +54,127 @@
 #include "/home/lionswrath/llvm/lib/CodeGen/LiveDebugVariables.h"
 
 #include "llvm/Target/TargetInstrInfo.h"
+#include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/Target/TargetSubtargetInfo.h"
 
 #include <set>
 #include <memory>
 #include <queue>
 #include <tuple>
+#include <algorithm>
 
 using namespace llvm;
 
 #define DEBUG_TYPE "regalloc"
+
+///-------------------------///
+///      Golden Interval    ///
+///-------------------------///
+
+class GoldenInterval {
+public:
+    GoldenInterval(unsigned Reg): reg(Reg) {}
+    
+    struct GoldenSegment {
+        SlotIndex start;
+        SlotIndex end;
+
+        GoldenSegment(SlotIndex s, SlotIndex e): start(s), end(e) {
+            assert(s < e && "Cannot create empty or backwards golden segment!");
+        }
+
+        bool contains(SlotIndex I) const {
+            return start <= I && I < end;
+        }
+
+        bool containsInterval(SlotIndex s, SlotIndex e) const {
+            assert(s < e && "Backwards Interval");
+            return (start <= s && s < end) && (start < e && e <= end);
+        }
+
+        bool operator<(const GoldenSegment &Other) const {
+            return std::tie(start, end) < std::tie(Other.start, Other.end);
+        }
+
+        bool operator>(const GoldenSegment &Other) const {
+            return std::tie(start, end) > std::tie(Other.start, Other.end);
+        }
+
+        bool operator==(const GoldenSegment &Other) const {
+            return start == Other.start && end == Other.end;
+        }
+    };
+
+    typedef std::vector<GoldenSegment> Segments;
+
+    typedef Segments::iterator iterator;
+    iterator begin() { return segments.begin(); }
+    iterator end()   { return segments.end(); }
+
+    typedef Segments::const_iterator const_iterator;
+    const_iterator begin() const { return segments.begin(); }
+    const_iterator end() const  { return segments.end(); }
+ 
+    SlotIndex slot_begin() { return segments.front().start; }
+    SlotIndex slot_end() { return segments.back().end; }
+
+    SlotIndex slot_begin() const { return segments.front().start; }
+    SlotIndex slot_end() const { return segments.back().end; }
+
+    const unsigned reg;
+    Segments segments;
+
+    bool isEmpty() {
+        return segments.empty();
+    }
+
+    void addSegment(SlotIndex s, SlotIndex e) {
+        segments.push_back(GoldenSegment(s,e)); 
+    }
+
+    bool overlaps(GoldenInterval Other) {
+        if (Other.isEmpty()) return false;
+/*
+        for (auto it = begin(); it != end(); it++) {
+            SlotIndex Start = (*it).start;
+            SlotIndex End = (*it).end;
+            
+            if (Start < Other.start) {
+                if (End > Other.end) {
+                    return true;
+                } else {
+                    if (Other.start < end) {
+                        return true;
+                    } else {
+                        return false;
+                    }
+                }
+            } else {
+                if (End > Other.end) {
+                    return true;
+                } else {
+                    if (Start < Other.end) {
+                        return true;
+                    } else {
+                        return false
+                    }
+                }
+            }
+        }*/
+    }
+
+    bool operator<(const GoldenInterval& other) const {
+        const SlotIndex &thisIndex = slot_begin();
+        const SlotIndex &otherIndex = other.slot_begin();
+
+        return std::tie(thisIndex, reg) < std::tie(otherIndex, other.reg);
+    }
+
+    void print(raw_ostream& Out) const {
+        Out << "Golden Interval Segments: " << segments.size() << "\n"; // Check LiveInterval printing
+    }
+
+};
 
 ///-------------------------///
 ///    Interference Graph   ///
@@ -72,13 +183,16 @@ using namespace llvm;
 class INode { // Interference Node
     typedef std::set<INode*> NeighborList; // Change the data Structure
 
-    LiveInterval* LI;
+    //LiveInterval* LI;
+    GoldenInterval* GI;
     NeighborList Neighbors;
 
     INode();
 
 public:
-    INode(LiveInterval* li) : LI(li) {}
+    //INode(LiveInterval* li) : LI(li) {}
+    INode(GoldenInterval* gi) : GI(gi) {}
+
 
     // Iterators
     typedef NeighborList::iterator iterator;
@@ -91,22 +205,22 @@ public:
     
     // Check interference with another Node
     bool checkInterference(const INode* Node) const {
-        return LI->overlaps(*Node->LI);
+        return GI->overlaps(*Node->GI);
     }
 
     // Check interference with another Live Interval
-    bool checkInterference(const LiveInterval& L) const {
-        return LI->overlaps(L);
+    bool checkInterference(const GoldenInterval& L) const {
+        return GI->overlaps(L);
     }
 
     // Getter of live interval
-    LiveInterval* getLiveInterval() { return LI; }
-    const LiveInterval* getLiveInterval() const { return LI; }
+    GoldenInterval* getLiveInterval() { return GI; }
+    const GoldenInterval* getLiveInterval() const { return GI; }
 
     // Getter of register color associated
     // Register of the interval this node represents
     unsigned getColor() const {
-        return LI->reg;
+        return GI->reg;
     }
 
     // Add Neighbor to NeighborList
@@ -131,7 +245,7 @@ public:
 
     // Print the interval related to this node
     void print(raw_ostream& Out) const {
-        Out << "Node :: " << LI; // Check LiveInterval printing
+        Out << "Node :: " << GI; // Check LiveInterval printing
     }
 };
 
@@ -148,11 +262,13 @@ class RNode {
     // Interference Graph Implementation
     typedef std::list<INode> InterferenceGraph;
     typedef std::set<RNode*> RegionNeighborList; // Change set later - Successors
+    typedef std::vector<GoldenInterval*> GoldenIntervalList;
 
     int Number;
 
     InterferenceGraph IGraph;
     RegionNeighborList RNeighbors;
+    GoldenIntervalList GIntervals;                  // Put all "LIs" here
 
     //RNode();
 public:
@@ -209,7 +325,8 @@ public:
             const LiveInterval *LI = &LIS.getInterval(Reg);
             //LiveInterval &NewLI = LIS.createEmptyInterval(Reg);
 
-            //outs() << NewLI;
+            GoldenInterval *gi = new GoldenInterval(Reg);
+
             for (auto it = LI->begin(); it != LI->end(); it++) {
                 Begin = (*it).start;
                 End = (*it).end;
@@ -219,6 +336,9 @@ public:
                     outs() << "     ------------------------------------------" << '\n';
                     outs() << "     Register: " << Reg << "\n     " << *LI << '\n';
                     outs() << "     ------------------------------------------" << '\n';
+                    
+                    gi->addSegment(Begin, End);
+
                 }
 
                 if (Begin >= Start && End >= Stop && Begin <= Stop) {
@@ -242,6 +362,23 @@ public:
                     outs() << "     ------------------------------------------" << '\n';
                 }
             }
+       
+            if (!gi->isEmpty()) {
+                GIntervals.push_back(gi);
+            }
+        }
+    }
+
+    void buildInterferenceGraph(LiveIntervals &LIS, VirtRegMap &VRM) {
+        IGraph.clear();
+
+        for (auto it = GIntervals.begin(); it != GIntervals.end(); it++) {
+            GoldenInterval *GI = *it;
+
+            if (TargetRegisterInfo::isVirtualRegister(GI->reg) || VRM.hasPhys(GI->reg))
+                continue;
+
+            IGraph.push_back(INode(GI));
         }
     }
 
@@ -251,6 +388,11 @@ public:
         
         for (auto it = RNeighbors.begin(); it != RNeighbors.end(); it++) {
             Out << "        -> RNode#" << (*it)->getNumber() << '\n';
+        }
+        Out << "        Quantity of Intervals: " << GIntervals.size() << "\n";
+        for (auto it = GIntervals.begin(); it != GIntervals.end(); it++) {
+            GoldenInterval *gi = *it;
+            Out << "            Reg: " << gi->reg <<" - [" << gi->slot_begin() << ", " << gi->slot_end() << ")\n";
         }
     }
 };
@@ -273,7 +415,7 @@ class FusionRegAlloc : public MachineFunctionPass,
     MachineFunction *MF;
     LiveIntervals *LIS;
     VirtRegMap *VRM;
-    LiveVariables *LVS; 
+    //LiveVariables *LVS; 
 
     std::unique_ptr<Spiller> SpillerInstance;
     
@@ -403,9 +545,6 @@ void FusionRegAlloc::printRegionGraph(raw_ostream& Out) {
         RNode *node = *it;
 
         node->print(Out);
-        
-        MachineRegisterInfo &MRI = MF->getRegInfo();
-        node->constructRegionLI(*LIS, MRI);
     }
 }
 
@@ -489,6 +628,13 @@ bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
 
     buildRegionGraph();
     sortEdges();
+
+    for (auto it = RGraph.begin(); it != RGraph.end(); it++) {
+        RNode *node = *it;
+        MachineRegisterInfo &MRI = MF->getRegInfo();
+        node->constructRegionLI(*LIS, MRI);
+    }
+   
     printRegionGraph(outs());
 
     //Initialize Interface
