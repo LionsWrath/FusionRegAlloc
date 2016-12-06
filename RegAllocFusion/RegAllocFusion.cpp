@@ -134,41 +134,17 @@ public:
 
     bool overlaps(GoldenInterval Other) {
         if (Other.isEmpty()) return false;
-/*
-        for (auto it = begin(); it != end(); it++) {
-            SlotIndex Start = (*it).start;
-            SlotIndex End = (*it).end;
-            
-            if (Start < Other.start) {
-                if (End > Other.end) {
-                    return true;
-                } else {
-                    if (Other.start < end) {
-                        return true;
-                    } else {
-                        return false;
-                    }
-                }
-            } else {
-                if (End > Other.end) {
-                    return true;
-                } else {
-                    if (Start < Other.end) {
-                        return true;
-                    } else {
-                        return false
-                    }
-                }
-            }
-        }*/
+
+        //Implementation missing
     }
 
-    bool operator<(const GoldenInterval& other) const {
+    // I think this is not neeeded
+    /*bool operator<(const GoldenInterval& other) const {
         const SlotIndex &thisIndex = slot_begin();
         const SlotIndex &otherIndex = other.slot_begin();
 
         return std::tie(thisIndex, reg) < std::tie(otherIndex, other.reg);
-    }
+    }*/
 
     void print(raw_ostream& Out) const {
         Out << "Golden Interval Segments: " << segments.size() << "\n"; // Check LiveInterval printing
@@ -209,8 +185,8 @@ public:
     }
 
     // Check interference with another Live Interval
-    bool checkInterference(const GoldenInterval& L) const {
-        return GI->overlaps(L);
+    bool checkInterference(const GoldenInterval& G) const {
+        return GI->overlaps(G);
     }
 
     // Getter of live interval
@@ -311,7 +287,7 @@ public:
         return unsigned(Number);
     }
 
-    // Line 154 of LiveInterval - Check LiveRange Segments of LiveInterval
+    // Maybe is a good idea use a enum to classify each type of golden segment
     void constructRegionLI(LiveIntervals &LIS, const MachineRegisterInfo &MRI) {
         SlotIndex Start, Stop, Begin, End;
         std::tie(Start, Stop) = LIS.getSlotIndexes()->getMBBRange(Number);
@@ -323,10 +299,10 @@ public:
                 continue;
 
             const LiveInterval *LI = &LIS.getInterval(Reg);
-            //LiveInterval &NewLI = LIS.createEmptyInterval(Reg);
 
             GoldenInterval *gi = new GoldenInterval(Reg);
 
+            // Verify all Segments of LI
             for (auto it = LI->begin(); it != LI->end(); it++) {
                 Begin = (*it).start;
                 End = (*it).end;
@@ -346,6 +322,8 @@ public:
                     outs() << "     ------------------------------------------" << '\n';
                     outs() << "     Register: " << Reg << "\n     " << *LI << '\n';
                     outs() << "     ------------------------------------------" << '\n';
+
+                    gi->addSegment(Begin, Stop);
                 }
 
                 if (Begin <= Start && End <= Stop && End >= Start) {
@@ -353,6 +331,8 @@ public:
                     outs() << "     ------------------------------------------" << '\n';
                     outs() << "     Register: " << Reg << "\n     " << *LI << '\n';
                     outs() << "     ------------------------------------------" << '\n';
+                    
+                    gi->addSegment(Start, End);
                 }
 
                 if (Begin <= Start && End >= Stop) {
@@ -360,18 +340,25 @@ public:
                     outs() << "     ------------------------------------------" << '\n';
                     outs() << "     Register: " << Reg << "\n     " << *LI << '\n';
                     outs() << "     ------------------------------------------" << '\n';
+
+                    gi->addSegment(Start, Stop);
                 }
             }
-       
+      
+            // Probably not deleting object when not adding
+            // Only add if is not empty
             if (!gi->isEmpty()) {
                 GIntervals.push_back(gi);
-            }
+            } 
         }
     }
+
+    // Graph maintenance functions 
 
     void buildInterferenceGraph(LiveIntervals &LIS, VirtRegMap &VRM) {
         IGraph.clear();
 
+        // Add all nodes to graph
         for (auto it = GIntervals.begin(); it != GIntervals.end(); it++) {
             GoldenInterval *GI = *it;
 
@@ -380,6 +367,8 @@ public:
 
             IGraph.push_back(INode(GI));
         }
+
+        // Verify interferences between all nodes
     }
 
     // Print the interval related to this node
@@ -415,7 +404,6 @@ class FusionRegAlloc : public MachineFunctionPass,
     MachineFunction *MF;
     LiveIntervals *LIS;
     VirtRegMap *VRM;
-    //LiveVariables *LVS; 
 
     std::unique_ptr<Spiller> SpillerInstance;
     
@@ -428,9 +416,6 @@ class FusionRegAlloc : public MachineFunctionPass,
         BranchProbability weight;
 
         Edge(RNode *s, RNode * d, BranchProbability w): src(s), dst(d), weight(w) {}
-
-        //float getWeight() { return weight; }
-        //void setWeight(float w) { weight = w; }
 
         bool operator<(const Edge &e) const {
             return weight < e.weight;
@@ -522,7 +507,7 @@ void FusionRegAlloc::getAnalysisUsage(AnalysisUsage &AU) const {
     MachineFunctionPass::getAnalysisUsage(AU);
 }
 
-//Interface functions - Some missing
+//Interface functions
 
 void FusionRegAlloc::releaseMemory() { SpillerInstance.reset(); }
 
@@ -629,6 +614,7 @@ bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
     buildRegionGraph();
     sortEdges();
 
+    // Create a function for this later
     for (auto it = RGraph.begin(); it != RGraph.end(); it++) {
         RNode *node = *it;
         MachineRegisterInfo &MRI = MF->getRegInfo();
