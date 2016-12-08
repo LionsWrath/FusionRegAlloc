@@ -390,7 +390,7 @@ public:
 
             IGraph.push_back(INode(GI));
         }
-
+        
         // Verify interferences between all nodes
         for (auto it = IGraph.begin(); it != IGraph.end(); it++) {
             for (auto ti = IGraph.begin(); ti != IGraph.end(); ti++) {
@@ -684,6 +684,10 @@ bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
 
         for (auto it = Order.begin(); it != Order.end(); it++) {
             outs() << TRI->getName((*it)) << " ";
+            //if (MRI->isReserved((*it))) outs() << "R";
+            //else outs() << "N";
+            //if (MRI->isAllocatable((*it))) outs() << "A ";
+            //else outs() << "N ";
         }
         outs() << "\n";
     }
