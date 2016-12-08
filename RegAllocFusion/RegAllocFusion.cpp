@@ -43,6 +43,7 @@
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/RegAllocRegistry.h"
+#include "llvm/CodeGen/RegisterClassInfo.h"
 #include "llvm/CodeGen/VirtRegMap.h"
 
 #include "llvm/Support/Debug.h"
@@ -133,11 +134,11 @@ public:
     }
 
     bool overlapFrom(GoldenSegment &LGS, GoldenSegment &RGS) {
-        if (LGS.start < RGS.end) {
+        if (LGS.start < RGS.start) {
             if (LGS.end > RGS.end) {
                 return true;
             } else {
-                if (RGS.start < LGS.end) {
+                if (LGS.end > RGS.start) {
                     return true;
                 } else return false;
             }
@@ -153,16 +154,15 @@ public:
     }
 
     bool overlaps(GoldenInterval Other) {
-        if (Other.isEmpty()) return false;
+        if (Other.isEmpty() || isEmpty()) return false;
 
-        bool interferes = false;
-        for (GoldenSegment seg : segments) {
-            for (auto it = Other.begin(); it != Other.end(); it++) {
-                interferes |= overlapFrom(seg, *it); 
+        for (auto it = begin(); it != end(); it++) {
+            for (auto ti = Other.begin(); ti != Other.end(); ti++) {
+                if (overlapFrom(*it, *ti)) return true; 
             }
         }
 
-        return interferes;
+        return false;
     }
 
     void print(raw_ostream& Out) const {
@@ -243,6 +243,10 @@ public:
             Out << "                Neighbor: ";
         }
     }
+
+    void printInterval(raw_ostream& Out) const {
+        Out << "[" << GI->slot_begin() << ", " << GI->slot_end() << ")";
+    }
 };
 
 raw_ostream& operator<< (raw_ostream& Out, const INode& N) {
@@ -266,7 +270,6 @@ class RNode {
     RegionNeighborList RNeighbors;
     GoldenIntervalList GIntervals;                  // Put all "LIs" here
 
-    //RNode();
 public:
     RNode(int N) : Number(N) {}
     
@@ -328,38 +331,38 @@ public:
                 End = (*it).end;
                 
                 if (Begin >= Start && End <= Stop) {
-                    outs() << "All in: \n";
-                    outs() << "     ------------------------------------------" << '\n';
-                    outs() << "     Register: " << Reg << "\n     " << *LI << '\n';
-                    outs() << "     ------------------------------------------" << '\n';
+                    //outs() << "All in: \n";
+                    //outs() << "     ------------------------------------------" << '\n';
+                    //outs() << "     Register: " << Reg << "\n     " << *LI << '\n';
+                    //outs() << "     ------------------------------------------" << '\n';
                     
                     gi->addSegment(Begin, End);
 
                 }
 
                 if (Begin >= Start && End >= Stop && Begin <= Stop) {
-                    outs() << "Begin in block and Continue: \n";
-                    outs() << "     ------------------------------------------" << '\n';
-                    outs() << "     Register: " << Reg << "\n     " << *LI << '\n';
-                    outs() << "     ------------------------------------------" << '\n';
+                    //outs() << "Begin in block and Continue: \n";
+                    //outs() << "     ------------------------------------------" << '\n';
+                    //outs() << "     Register: " << Reg << "\n     " << *LI << '\n';
+                    //outs() << "     ------------------------------------------" << '\n';
 
                     gi->addSegment(Begin, Stop);
                 }
 
                 if (Begin <= Start && End <= Stop && End >= Start) {
-                    outs() << "Come into the block and ends: \n";
-                    outs() << "     ------------------------------------------" << '\n';
-                    outs() << "     Register: " << Reg << "\n     " << *LI << '\n';
-                    outs() << "     ------------------------------------------" << '\n';
+                    //outs() << "Come into the block and ends: \n";
+                    //outs() << "     ------------------------------------------" << '\n';
+                    //outs() << "     Register: " << Reg << "\n     " << *LI << '\n';
+                    //outs() << "     ------------------------------------------" << '\n';
                     
                     gi->addSegment(Start, End);
                 }
 
                 if (Begin <= Start && End >= Stop) {
-                    outs() << "Live-Throught: \n";
-                    outs() << "     ------------------------------------------" << '\n';
-                    outs() << "     Register: " << Reg << "\n     " << *LI << '\n';
-                    outs() << "     ------------------------------------------" << '\n';
+                    //outs() << "Live-Throught: \n";
+                    //outs() << "     ------------------------------------------" << '\n';
+                    //outs() << "     Register: " << Reg << "\n     " << *LI << '\n';
+                    //outs() << "     ------------------------------------------" << '\n';
 
                     gi->addSegment(Start, Stop);
                 }
@@ -389,8 +392,8 @@ public:
         }
 
         // Verify interferences between all nodes
-        for (auto it = IGraph.begin(); it != --IGraph.end(); it++) {
-            for (auto ti = ++it; ti != IGraph.end(); ti++) {
+        for (auto it = IGraph.begin(); it != IGraph.end(); it++) {
+            for (auto ti = IGraph.begin(); ti != IGraph.end(); ti++) {
                 if (it == ti) continue;
                 if ((*it).checkInterference(&(*ti))) {
                     // Add two sides 
@@ -415,9 +418,12 @@ public:
         }
         Out << "        Interference Graph: " << IGraph.size() << "\n";
         for (auto it = IGraph.begin(); it != IGraph.end(); it++) {
-            Out << "            INode :: Reg " << (*it).getColor() << " -> ";
+            Out << "            INode :: ";
+            (*it).printInterval(Out);
+            Out << " -> ";
             for (auto ti = (*it).begin(); ti != (*it).end(); ti++) {
-                Out << (*(*ti)).getColor() << ", ";
+                (*(*ti)).printInterval(Out);
+                Out << ", ";
             }
             Out << "\n";
         }
@@ -442,6 +448,10 @@ class FusionRegAlloc : public MachineFunctionPass,
     MachineFunction *MF;
     LiveIntervals *LIS;
     VirtRegMap *VRM;
+    RegisterClassInfo RCI;
+
+    MachineRegisterInfo *MRI; 
+    const TargetRegisterInfo *TRI;
 
     std::unique_ptr<Spiller> SpillerInstance;
     
@@ -632,8 +642,6 @@ void FusionRegAlloc::sortEdges() {
 
             BranchProbability BP = MBPI.getEdgeProbability(MBB, it);
             Edge *e = new Edge(RGraph[i], getRegion(SUC->getNumber()), BP);
-        
-            e->print(outs());
 
             Queue.push(e);
         }
@@ -648,20 +656,37 @@ bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
     LIS = &getAnalysis<LiveIntervals>(); 
     VRM = &getAnalysis<VirtRegMap>();
 
+    MRI = &MF->getRegInfo();
+    TRI = &VRM->getTargetRegInfo();
+
+    MRI->freezeReservedRegs(*MF);
+    RCI.runOnMachineFunction(*MF);      
+    
     buildRegionGraph();
     sortEdges();
 
     // Create a function for this later
     for (auto it = RGraph.begin(); it != RGraph.end(); it++) {
         RNode *node = *it;
-        MachineRegisterInfo &MRI = MF->getRegInfo();
         
-        node->constructRegionLI(*LIS, MRI);
+        node->constructRegionLI(*LIS, *MRI);
         node->buildInterferenceGraph(*LIS, *VRM);
     }
 
     printRegionGraph(outs());
 
+    for (unsigned i=0, e = MRI->getNumVirtRegs(); i != e; ++i) {
+        unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
+
+        if (MRI->reg_nodbg_empty(Reg)) continue;
+
+        ArrayRef<MCPhysReg> Order = RCI.getOrder(MRI->getRegClass(Reg));
+
+        for (auto it = Order.begin(); it != Order.end(); it++) {
+            outs() << TRI->getName((*it)) << " ";
+        }
+        outs() << "\n";
+    }
     //Initialize Interface
     //RegAllocBase::init(getAnalysis<VirtRegMap>(),
     //                   getAnalysis<LiveIntervals>(),
@@ -670,6 +695,6 @@ bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
     //allocatePhysRegs(); //Interface that calls seedLiveRegs
     
     //Clean memory and return changed
-    releaseMemory();
-    return true;
+    //releaseMemory();
+   return true;
 }
