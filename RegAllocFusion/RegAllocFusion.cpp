@@ -675,22 +675,37 @@ bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
 
     printRegionGraph(outs());
 
+    //For each virtual register
     for (unsigned i=0, e = MRI->getNumVirtRegs(); i != e; ++i) {
         unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
 
         if (MRI->reg_nodbg_empty(Reg)) continue;
 
-        ArrayRef<MCPhysReg> Order = RCI.getOrder(MRI->getRegClass(Reg));
+        MachineRegisterInfo::reg_iterator ri = MRI->reg_begin(Reg);
+       
+        for (auto it = MRI->reg_begin(Reg); it != MRI->reg_end(); it++) {
+            outs() << *(*it).getParent() << "\n"; 
+        }
+        outs() << "-----------------------\n\n";
+         
+        //ArrayRef<MCPhysReg> Order = RCI.getOrder(MRI->getRegClass(Reg));
 
-        for (auto it = Order.begin(); it != Order.end(); it++) {
-            outs() << TRI->getName((*it)) << " ";
+        //Print all physRegs that can be used by it
+        //for (auto it = Order.begin(); it != Order.end(); it++) {
+            //outs() << TRI->getName((*it)) << " ";
             //if (MRI->isReserved((*it))) outs() << "R";
             //else outs() << "N";
             //if (MRI->isAllocatable((*it))) outs() << "A ";
             //else outs() << "N ";
-        }
-        outs() << "\n";
+        //}
+        //outs() << "\n";
     }
+
+    // begin coloring of the interference graph
+    // Maybe correct some link errors because of the physreg set
+
+    //----------------------------------------------------------------Stopped here
+
     //Initialize Interface
     //RegAllocBase::init(getAnalysis<VirtRegMap>(),
     //                   getAnalysis<LiveIntervals>(),
