@@ -673,8 +673,6 @@ bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
         node->buildInterferenceGraph(*LIS, *VRM);
     }
 
-    printRegionGraph(outs());
-
     //For each virtual register
     for (unsigned i=0, e = MRI->getNumVirtRegs(); i != e; ++i) {
         unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
@@ -682,9 +680,11 @@ bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
         if (MRI->reg_nodbg_empty(Reg)) continue;
 
         MachineRegisterInfo::reg_iterator ri = MRI->reg_begin(Reg);
-       
+      
+        // Extracting uses of each Reg 
         for (auto it = MRI->reg_begin(Reg); it != MRI->reg_end(); it++) {
-            outs() << *(*it).getParent() << "\n"; 
+            outs() << *(*it).getParent() << " "; 
+            outs() << (*it).getParent()->isImplicitDef() << "\n"; 
         }
         outs() << "-----------------------\n\n";
          
