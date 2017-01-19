@@ -7,15 +7,17 @@
 // This file contains the Fusion Register Allocator.
 //
 //  TODO:
-//      - Verify region formation with Basic Blocks in mind
-//          - Get CFG ( Basic Blocks as Region )
-//          - Order EDGES ( Priotity List )
-//          - Create a Interference Graph for each region
-//      - Check how many live ranges must be spilled within each region
+//      OK - Verify region formation with Basic Blocks in mind
+//          OK - Get CFG ( Basic Blocks as Region )
+//          OK - Order EDGES ( Priotity List )
+//          OK - Create a Interference Graph for each region
+//      - Fix the Interference Graph creation (Verify Regs)
+//      OK - Check how many live ranges must be spilled within each region
 //      - Graph Fusion
 //          - Begin Fusing the graphs in the EDGE order
 //          - Always maintain the simplificability
 //          - Return an unique Interference Graph
+//      - Transform our GI to LI 
 //      - Color Assignment
 //          - Choose a technique?
 //      - Code Insertion
@@ -204,6 +206,29 @@ public:
     // Check interference with another Live Interval
     bool checkInterference(const GoldenInterval& G) const {
         return GI->overlaps(G);
+    }
+
+    std::vector<unsigned> getAllPhysRegs(RegisterClassInfo *RCI, MachineRegisterInfo *MRI) {
+        std::vector<unsigned> allPhysRegs;
+
+        ArrayRef<MCPhysReg> Order = RCI->getOrder(MRI->getRegClass(getColor()));
+
+        //Add all physRegs that can be used by it
+        for (auto it = Order.begin(); it != Order.end(); it++) {
+            allPhysRegs.push_back(*it);
+        }
+        
+        return allPhysRegs; 
+    }
+
+    // Verify if ths node is colorable
+    bool isColorable(RegisterClassInfo *RCI, MachineRegisterInfo *MRI) {
+        //For each virtual register
+        
+        std::vector<unsigned> allPhysRegs = getAllPhysRegs(RCI, MRI);
+        
+        if (allPhysRegs.size() < numNeighbors()) return false;
+        return true;
     }
 
     // Getter of golden interval
@@ -402,6 +427,20 @@ public:
                 } 
             }
         }
+    }
+
+    // Count the number of necessary spills in a interference graph
+    // Testing
+    int getNecessarySpills(RegisterClassInfo *RCI, MachineRegisterInfo *MRI) {
+        std::vector<unsigned> allPhysRegs;
+        int numberOfSpills = 0;
+
+        //For each virtual register
+        for (auto it = IGraph.begin(); it != IGraph.end(); it++) {
+            if (!it->isColorable(RCI, MRI)) numberOfSpills++;
+        }
+       
+        return numberOfSpills; 
     }
 
     // Print the interval related to this node
@@ -673,20 +712,25 @@ bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
         node->buildInterferenceGraph(*LIS, *VRM);
     }
 
+    for (auto it = RGraph.begin(); it != RGraph.end(); it++) {
+        RNode *node = *it;
+        
+        outs() << "-> RNode#" << node->getNumber() << ": " << node->getNecessarySpills(&RCI, MRI) << "\n";
+    }
+    
     //For each virtual register
-    for (unsigned i=0, e = MRI->getNumVirtRegs(); i != e; ++i) {
-        unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
+    //for (unsigned i=0, e = MRI->getNumVirtRegs(); i != e; ++i) {
+        //unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
 
-        if (MRI->reg_nodbg_empty(Reg)) continue;
+        //if (MRI->reg_nodbg_empty(Reg)) continue;
 
-        MachineRegisterInfo::reg_iterator ri = MRI->reg_begin(Reg);
+        //MachineRegisterInfo::reg_iterator ri = MRI->reg_begin(Reg);
       
         // Extracting uses of each Reg 
-        for (auto it = MRI->reg_begin(Reg); it != MRI->reg_end(); it++) {
-            outs() << *(*it).getParent() << " "; 
-            outs() << (*it).getParent()->isImplicitDef() << "\n"; 
-        }
-        outs() << "-----------------------\n\n";
+        //for (auto it = MRI->reg_begin(Reg); it != MRI->reg_end(); it++) {
+            //outs() << *(*it).getParent() << " "; 
+        //}
+        //outs() << "-----------------------\n\n";
          
         //ArrayRef<MCPhysReg> Order = RCI.getOrder(MRI->getRegClass(Reg));
 
@@ -699,7 +743,7 @@ bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
             //else outs() << "N ";
         //}
         //outs() << "\n";
-    }
+    //}
 
     // begin coloring of the interference graph
     // Maybe correct some link errors because of the physreg set
@@ -715,5 +759,5 @@ bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
     
     //Clean memory and return changed
     //releaseMemory();
-   return true;
+    return true;
 }
