@@ -335,6 +335,17 @@ public:
         return unsigned(Number);
     }
 
+    //Testing
+    std::set<unsigned> getRelatedRegisters() {
+        std::set<unsigned> relatedRegisters;
+
+        for (auto it = IGraph.begin(); it != IGraph.end(); it++) {
+            relatedRegisters.insert(it->getColor()); 
+        }
+
+        return relatedRegisters;
+    }
+
     // Maybe is a good idea use a enum to classify each type of golden segment
     // I am getting the right regs - question mark
     void constructRegionLI(LiveIntervals &LIS, const MachineRegisterInfo &MRI) {
@@ -481,6 +492,14 @@ raw_ostream& operator<< (raw_ostream& Out, const RNode& N) {
 class FusionRegAlloc : public MachineFunctionPass,
                        public RegAllocBase { 
 
+    // Testing
+    struct Span {
+        GoldenInterval *from;
+        GoldenInterval *to;
+    };
+
+    typedef std::vector<Span> span_e;
+    
     typedef std::vector<RNode*> RegionGraph;
     typedef std::vector<MachineBasicBlock*> MachineBasicBlockList;
     
@@ -553,6 +572,10 @@ class FusionRegAlloc : public MachineFunctionPass,
         RNode* getRegion(int);
         MachineBasicBlock* getMBB(int);
         void printRegionGraph(raw_ostream&);
+
+        //Fusion part
+        span_e findSpanning(RNode*, RNode*);    
+        void fuzeRegions();
 };
 
 //------------------------------------------------------------------Implementation
@@ -685,6 +708,29 @@ void FusionRegAlloc::sortEdges() {
             Queue.push(e);
         }
     }
+}
+
+//-------------------------------------------------------------------------FUSION
+
+// Testing
+// Create a span_e with all data spanning
+FusionRegAlloc::span_e FusionRegAlloc::findSpanning(RNode *b1, RNode *b2) {
+    FusionRegAlloc::span_e span;
+
+    std::set<unsigned> related1 = b1->getRelatedRegisters();
+    std::set<unsigned> related2 = b2->getRelatedRegisters();
+
+    // Verificar se as variáveis continuam
+    for (auto it = related1.begin(); it != related1.end()) {
+        Span temp = Span();
+        if (related2.find(*it)) span.push_back(temp);
+    }
+
+    return span;
+}
+
+void FusionRegAlloc::fuzeRegions() {
+    
 }
 
 //------------------------------------------------------------------------------
