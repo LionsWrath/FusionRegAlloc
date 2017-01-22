@@ -248,10 +248,10 @@ public:
         return allPhysRegs; 
     }
 
-    // Verify if ths node is colorable
+    // Verify if the node is colorable
     bool isColorable(RegisterClassInfo *RCI, MachineRegisterInfo *MRI) {
-        //For each virtual register
-        
+        if (checkSpill()) return false;
+
         std::vector<unsigned> allPhysRegs = getAllPhysRegs(RCI, MRI);
         
         if (allPhysRegs.size() < numNeighbors()) return false;
@@ -494,6 +494,7 @@ public:
     }
 
     // Dont remove the src node
+    // This isnt necessary, remove directly all edges connecting to the spill node
     void replaceEdge(INode *src, INode *rep) {
         for (auto it = IGraph.begin(); it != IGraph.end(); it++) {
             for (auto ti = it->begin(); ti != it->end(); it++) {
