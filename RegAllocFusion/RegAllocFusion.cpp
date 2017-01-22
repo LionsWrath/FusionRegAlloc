@@ -21,6 +21,8 @@
 //      - Color Assignment
 //          - Choose a technique?
 //      - Code Insertion
+//  -Verify placement and removal of spilled nodes in IGraph
+//
 //
 //  Classes to take a look:
 //      - LiveRangeCalc.h       -> Compute Live Ranges from scratch
