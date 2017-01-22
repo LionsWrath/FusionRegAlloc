@@ -21,8 +21,8 @@
 //      - Color Assignment
 //          - Choose a technique?
 //      - Code Insertion
-//  -Verify placement and removal of spilled nodes in IGraph
-//
+//      - Verify placement and removal of spilled nodes in IGraph
+//      - Adapt degree calculation to the spill
 //
 //  Classes to take a look:
 //      - LiveRangeCalc.h       -> Compute Live Ranges from scratch
@@ -197,7 +197,7 @@ public:
 ///-------------------------///
 
 class INode { // Interference Node
-    typedef std::set<INode*> NeighborList; // Change the data Structure
+    typedef std::multiset<INode*> NeighborList; // Change the data Structure
 
     GoldenInterval* GI;
     NeighborList Neighbors;
@@ -250,13 +250,19 @@ public:
         return allPhysRegs; 
     }
 
+    // Testing
     // Verify if the node is colorable
     bool isColorable(RegisterClassInfo *RCI, MachineRegisterInfo *MRI) {
         if (checkSpill()) return false;
 
         std::vector<unsigned> allPhysRegs = getAllPhysRegs(RCI, MRI);
-        
-        if (allPhysRegs.size() < numNeighbors()) return false;
+       
+        int degree = 0;
+        for (auto it = Neighbors.begin(); it != Neighbors.end(); it++) {
+            if (!(*it)->checkSpill()) degree++;
+        }
+
+        if (allPhysRegs.size() < degree) return false;
         return true;
     }
 
@@ -291,10 +297,11 @@ public:
     }
 
     // Merge two INode edges
-    // Set automatically verify duplicates
-    void merge(INode *src) {
+    // We need a structure that permits duplicates
+    void merge(INode *src, bool supress) {
         for (auto it = src->begin(); it != src->end(); it++) {
-            addNeighbor(*it); 
+            if (Neighbors.find(src) != Neighbors.end() || !supress)
+                addNeighbor(*it); 
         } 
     }
 
@@ -322,7 +329,10 @@ raw_ostream& operator<< (raw_ostream& Out, const INode& N) {
 
 class RNode {    
     // Interference Graph Implementation
+public:
     typedef std::list<INode> InterferenceGraph;
+
+private:
     typedef std::set<RNode*> RegionNeighborList; // Change set later - Successors
     typedef std::vector<GoldenInterval*> GoldenIntervalList;
 
@@ -603,6 +613,7 @@ class FusionRegAlloc : public MachineFunctionPass,
     };
 
     typedef std::vector<Span> span_e;
+    typedef std::vector<RNode::InterferenceGraph> InterferenceGraphs;
     
     typedef std::vector<RNode*> RegionGraph;
     typedef std::vector<MachineBasicBlock*> MachineBasicBlockList;
@@ -696,6 +707,11 @@ class FusionRegAlloc : public MachineFunctionPass,
         void coalesceLiveRanges(span_e, RNode*);
         void mergingCliques(RNode*,RegisterClassInfo*, MachineRegisterInfo*);
         INode* chooseNodeToSpill(RNode*);
+        RNode::InterferenceGraph createSnapshot(RNode*);
+        void coalesceSplitableLiveRanges(span_e, RNode*, InterferenceGraphs*);
+        RNode::InterferenceGraph maintainSimplifiability(RNode*, InterferenceGraphs*, 
+                RegisterClassInfo *RCI, MachineRegisterInfo *MRI); 
+        void removeAllRelatedEdges(RNode::InterferenceGraph*, INode*); 
 };
 
 //------------------------------------------------------------------Implementation
@@ -832,9 +848,56 @@ void FusionRegAlloc::sortEdges() {
 
 //-------------------------------------------------------------------------FUSION
 
-// When it was spilled the other nodes are already corrected
-// Create a new Region too
-void FusionRegAlloc::coalesceLiveRanges(span_e span, RNode *RN) {
+//Considering as bidirectional edges
+void FusionRegAlloc::removeAllRelatedEdges(RNode::InterferenceGraph *IG, INode *IN) {
+    for (auto it = IN->begin(); it != IN->end(); it++) {
+        for (auto ti = (*it)->begin(); ti != (*it)->end(); ti++) {
+            if (*ti == IN) (*it)->removeNeighbor(IN);
+        }
+    }
+}
+
+RNode::InterferenceGraph FusionRegAlloc::maintainSimplifiability(RNode *RN, InterferenceGraphs *snapshots,
+        RegisterClassInfo *RCI, MachineRegisterInfo *MRI) {
+    RNode::InterferenceGraph IG = snapshots->back();
+    bool removed;
+
+    while (!IG.empty()) {
+        removed = false;
+        for (auto it = IG.begin(); it != IG.end(); it++) {
+            if (it->isColorable(RCI, MRI)) { 
+                removeAllRelatedEdges(&IG, &*it);
+                IG.erase(it);
+
+                removed = true;
+            } 
+        }
+
+        if (!removed) {
+            assert(snapshots->empty() && "Impossible to Simplify!\n");
+
+            snapshots->pop_back();
+            IG = snapshots->back();
+        }
+    }
+
+    return snapshots->back();
+}
+
+RNode::InterferenceGraph FusionRegAlloc::createSnapshot(RNode *RN) {
+    RNode::InterferenceGraph snapshot;
+    RNode::InterferenceGraph *IG = RN->getInterferenceGraph();
+
+    for (auto it = IG->begin(); it != IG->end(); it++) {
+        snapshot.push_back(*it);
+    }
+
+    return snapshot;
+}
+
+void FusionRegAlloc::coalesceSplitableLiveRanges(span_e span, RNode *RN, InterferenceGraphs *snapshots) {
+
+    snapshots->push_back(createSnapshot(RN));
 
     for (auto it = span.begin(); it != span.end(); it++) {
         if (isSplitable(*it)) {
@@ -847,8 +910,40 @@ void FusionRegAlloc::coalesceLiveRanges(span_e span, RNode *RN) {
             INode *IN = new INode(GI);
 
             // Merging Interference Edges
-            IN->merge(it->from);
-            IN->merge(it->to);  
+            IN->merge(it->from, false);
+            IN->merge(it->to, false);  
+
+            // Replacing wrong edges and removing the coalesced Nodes
+            RN->replaceEdge(it->from, IN);
+            RN->removeInterferenceNode(it->from);
+            RN->replaceEdge(it->from, IN);
+            RN->removeInterferenceNode(it->to);
+
+            RN->addInterferenceNode(IN);
+
+            snapshots->push_back(createSnapshot(RN));
+        } 
+    }
+   
+}
+
+// When it was spilled the other nodes are already corrected
+// Create a new Region too
+void FusionRegAlloc::coalesceLiveRanges(span_e span, RNode *RN) {
+
+    for (auto it = span.begin(); it != span.end(); it++) {
+        if (!isSplitable(*it)) {
+            GoldenInterval *GI = new GoldenInterval(it->from->getColor());
+            
+            // Unioning Two Live ranges
+            GI->join(it->from->getGoldenInterval());
+            GI->join(it->to->getGoldenInterval());
+
+            INode *IN = new INode(GI);
+
+            // Merging Interference Edges (supress)
+            IN->merge(it->from, true);
+            IN->merge(it->to, true);  
 
             // Propagating Attributes
             IN->markAsSpilled();
@@ -866,8 +961,8 @@ void FusionRegAlloc::coalesceLiveRanges(span_e span, RNode *RN) {
 
 bool FusionRegAlloc::isSplitable(Span s) {
     if (s.from->checkSpill() && s.to->checkSpill())
-        return true;
-    return false;
+        return false;
+    return true;
 }
 
 // Testing
@@ -901,11 +996,9 @@ INode* FusionRegAlloc::chooseNodeToSpill(RNode *RN) {
 void FusionRegAlloc::mergingCliques(RNode *RN, RegisterClassInfo *RCI, MachineRegisterInfo *MRI) {
     int necessarySpills = RN->getNecessarySpills(RCI, MRI);
 
-    if (necessarySpills > 0) {
-        for (int i=0; i < necessarySpills; i++) {
-            INode *IN = chooseNodeToSpill(RN);
-            IN->markAsSpilled();         
-        }
+    for (int i=0; i < necessarySpills; i++) {
+        INode *IN = chooseNodeToSpill(RN);
+        IN->markAsSpilled();         
     }
 }
 
@@ -923,6 +1016,11 @@ void FusionRegAlloc::fuzeRegions(RegisterClassInfo *RCI, MachineRegisterInfo *MR
         span_e span = findSpanning(e->getFrom(), e->getTo());
         coalesceLiveRanges(span, RN);
         mergingCliques(RN, RCI, MRI);        
+
+        InterferenceGraphs snapshots;
+        coalesceSplitableLiveRanges(span, RN, &snapshots);
+
+        maintainSimplifiability(RN, &snapshots, RCI, MRI);
 
         Queue.pop();
     }
