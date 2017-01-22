@@ -76,7 +76,7 @@ using namespace llvm;
 
 class GoldenInterval {
 public:
-    GoldenInterval(unsigned Reg): reg(Reg) {}
+    GoldenInterval(unsigned Reg): reg(Reg), spillStatus(0) {}
     
     struct GoldenSegment {
         SlotIndex start;
@@ -127,8 +127,25 @@ public:
     const unsigned reg;
     Segments segments;
 
+    bool spillStatus;
+    
+    bool isSpilled() { return spillStatus; }
+
+    bool spillLR() { return spillStatus = 1; }
+
+    // Unite two GI segments
+    void join(GoldenInterval *src) {
+        for (auto it = src->begin(); it != src->end(); it++) {
+            addSegment(*it);
+        } 
+    }
+
     bool isEmpty() {
         return segments.empty();
+    }
+
+    void addSegment(GoldenSegment GS) {
+        segments.push_back(GS);
     }
 
     void addSegment(SlotIndex s, SlotIndex e) {
@@ -197,7 +214,17 @@ public:
     iterator end()                  { return Neighbors.end(); }
     const_iterator begin() const    { return Neighbors.begin(); }
     const_iterator end() const      { return Neighbors.end(); }
+   
+    // Const function cannot change variables values
+    bool checkSpill() const {
+        if (GI->isSpilled()) return true;
+        return false;
+    }
     
+    void markAsSpilled() {
+        GI->spillLR();
+    }
+
     // Check interference with another Node
     bool checkInterference(const INode* Node) const {
         return GI->overlaps(*Node->GI);
@@ -259,6 +286,14 @@ public:
     // Return number of interfering Nodes
     unsigned numNeighbors() const {
        return unsigned(Neighbors.size()); 
+    }
+
+    // Merge two INode edges
+    // Set automatically verify duplicates
+    void merge(INode *src) {
+        for (auto it = src->begin(); it != src->end(); it++) {
+            addNeighbor(*it); 
+        } 
     }
 
     // Print the interval related to this node
@@ -336,6 +371,7 @@ public:
     }
 
     //Testing
+    //Find all registers on the IGraph
     std::set<unsigned> getRelatedRegisters() {
         std::set<unsigned> relatedRegisters;
 
@@ -344,6 +380,14 @@ public:
         }
 
         return relatedRegisters;
+    }
+
+    //Testing
+    INode* getNode(unsigned reg) {
+        for (auto it = IGraph.begin(); it != IGraph.end(); it++) {
+            if (it->getColor() == reg)
+               return &(*it); 
+        }
     }
 
     // Maybe is a good idea use a enum to classify each type of golden segment
@@ -414,6 +458,38 @@ public:
 
     // Graph maintenance functions 
 
+    void removeGoldenInterval(GoldenInterval *GI) {
+        for (auto it = GIntervals.begin(); it != GIntervals.end(); it++) {
+            if (GI->reg == (*it)->reg)
+                GIntervals.erase(it);
+        }
+    }
+
+    void addInterferenceNode(INode *node) {
+        IGraph.push_back(*node);
+        GIntervals.push_back(node->getGoldenInterval());
+    }
+
+    // Problem: IGraph uses non pointer on list
+    // Change that lates
+    void removeInterferenceNode(INode *node) {
+        removeGoldenInterval(node->getGoldenInterval());
+
+        for (auto it = IGraph.begin(); it != IGraph.end(); it++) {
+            if (it->getGoldenInterval() == node->getGoldenInterval())
+                IGraph.erase(it);
+        }
+    }
+
+    // Add all INodes from another region IGraph
+    void addAllNodes(RNode *src) {
+        InterferenceGraph *IG = src->getInterferenceGraph();
+
+        for (auto it = IG->begin(); it != IG->end(); it++) {
+            addInterferenceNode(&*it);
+        } 
+    }
+
     void buildInterferenceGraph(LiveIntervals &LIS, VirtRegMap &VRM) {
         IGraph.clear();
 
@@ -453,6 +529,14 @@ public:
        
         return numberOfSpills; 
     }
+    
+    // bool checkSpill(unsigned reg) {
+        // //For each virtual register
+        // for (auto it = IGraph.begin(); it != IGraph.end(); it++) {
+            // if (it->getColor() == reg) 
+                // return it->checkSpill();
+        // }        
+    // }
 
     // Print the interval related to this node
     void print(raw_ostream& Out) const {
@@ -492,10 +576,11 @@ raw_ostream& operator<< (raw_ostream& Out, const RNode& N) {
 class FusionRegAlloc : public MachineFunctionPass,
                        public RegAllocBase { 
 
-    // Testing
     struct Span {
-        GoldenInterval *from;
-        GoldenInterval *to;
+        INode *from;
+        INode *to;
+
+        Span(INode *f, INode *t): from(f), to(t) {}
     };
 
     typedef std::vector<Span> span_e;
@@ -529,6 +614,14 @@ class FusionRegAlloc : public MachineFunctionPass,
 
         bool operator>(const Edge &e) const {
             return weight > e.weight;
+        }
+
+        RNode* getFrom() const {
+            return src;
+        }
+
+        RNode* getTo() {
+            return dst;
         }
 
         void print(raw_ostream &Out) const {
@@ -576,6 +669,8 @@ class FusionRegAlloc : public MachineFunctionPass,
         //Fusion part
         span_e findSpanning(RNode*, RNode*);    
         void fuzeRegions();
+        bool isSplitable(Span);
+        void coalesceLiveRanges(span_e, RNode*);
 };
 
 //------------------------------------------------------------------Implementation
@@ -712,6 +807,42 @@ void FusionRegAlloc::sortEdges() {
 
 //-------------------------------------------------------------------------FUSION
 
+// When it was spilled the other nodes are already corrected
+// Create a new Region too
+void FusionRegAlloc::coalesceLiveRanges(span_e span, RNode *RN) {
+
+    for (auto it = span.begin(); it != span.end(); it++) {
+        if (isSplitable(*it)) {
+
+            RN->removeInterferenceNode(it->from);
+            RN->removeInterferenceNode(it->to);
+
+            GoldenInterval *GI = new GoldenInterval(it->from->getColor());
+            
+            // Unioning Two Live ranges
+            GI->join(it->from->getGoldenInterval());
+            GI->join(it->to->getGoldenInterval());
+
+            INode *IN = new INode(GI);
+
+            // Merging Interference Edges
+            IN->merge(it->from);
+            IN->merge(it->to);  
+
+            // Propagating Attributes
+            IN->markAsSpilled();
+
+            RN->addInterferenceNode(IN);
+        } 
+    }
+}
+
+bool FusionRegAlloc::isSplitable(Span s) {
+    if (s.from->checkSpill() && s.to->checkSpill())
+        return true;
+    return false;
+}
+
 // Testing
 // Create a span_e with all data spanning
 FusionRegAlloc::span_e FusionRegAlloc::findSpanning(RNode *b1, RNode *b2) {
@@ -721,16 +852,32 @@ FusionRegAlloc::span_e FusionRegAlloc::findSpanning(RNode *b1, RNode *b2) {
     std::set<unsigned> related2 = b2->getRelatedRegisters();
 
     // Verificar se as variáveis continuam
-    for (auto it = related1.begin(); it != related1.end()) {
-        Span temp = Span();
-        if (related2.find(*it)) span.push_back(temp);
+    for (auto it = related1.begin(); it != related1.end(); it++) {
+        if (related2.find(*it) != related2.end()) {
+            Span temp = Span(b1->getNode(*it), b2->getNode(*it));
+            span.push_back(temp);
+        }
     }
 
     return span;
 }
 
 void FusionRegAlloc::fuzeRegions() {
+    RNode *RN;
     
+    while (Queue.empty()) {
+        Edge *e = Queue.top();
+
+        RN = new RNode(e->getFrom()->getNumber() + e->getTo()->getNumber());
+        
+        RN->addAllNodes(e->getFrom());
+        RN->addAllNodes(e->getTo());
+
+        span_e span =findSpanning(e->getFrom(), e->getTo());
+        coalesceLiveRanges(span, RN);
+
+        Queue.pop();
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -763,6 +910,8 @@ bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
         
         outs() << "-> RNode#" << node->getNumber() << ": " << node->getNecessarySpills(&RCI, MRI) << "\n";
     }
+
+    fuzeRegions();
     
     //For each virtual register
     //for (unsigned i=0, e = MRI->getNumVirtRegs(); i != e; ++i) {
