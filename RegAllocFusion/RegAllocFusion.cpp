@@ -131,7 +131,7 @@ public:
     
     bool isSpilled() { return spillStatus; }
 
-    bool spillLR() { return spillStatus = 1; }
+    bool spillLiveRange() { return spillStatus = 1; }
 
     // Unite two GI segments
     void join(GoldenInterval *src) {
@@ -222,7 +222,7 @@ public:
     }
     
     void markAsSpilled() {
-        GI->spillLR();
+        GI->spillLiveRange();
     }
 
     // Check interference with another Node
@@ -396,7 +396,7 @@ public:
         SlotIndex Start, Stop, Begin, End;
         std::tie(Start, Stop) = LIS.getSlotIndexes()->getMBBRange(Number);
 
-        outs() << "[ " << Start << ", " << Stop << " ]" << '\n';
+        //outs() << "[ " << Start << ", " << Stop << " ]" << '\n';
         for (unsigned i=0, e = MRI.getNumVirtRegs(); i != e; ++i) {
             unsigned Reg = TargetRegisterInfo::index2VirtReg(i);
             
@@ -494,12 +494,12 @@ public:
     }
 
     // Dont remove the src node
-    void replaceEdge(INode *src, INode *dst) {
+    void replaceEdge(INode *src, INode *rep) {
         for (auto it = IGraph.begin(); it != IGraph.end(); it++) {
             for (auto ti = it->begin(); ti != it->end(); it++) {
                 if (*ti == src) {
                     it->removeNeighbor(*ti);
-                    it->addNeighbor(dst);
+                    it->addNeighbor(rep);
                 }
             }
         }
@@ -539,7 +539,8 @@ public:
 
         //For each virtual register
         for (auto it = IGraph.begin(); it != IGraph.end(); it++) {
-            if (!it->isColorable(RCI, MRI)) numberOfSpills++;
+            if (!it->isColorable(RCI, MRI) && !it->checkSpill()) 
+                numberOfSpills++;
         }
        
         return numberOfSpills; 
@@ -618,9 +619,13 @@ class FusionRegAlloc : public MachineFunctionPass,
 
     // Priority Queue Implementation
     struct Edge {
+        private:
+    
         RNode *src, *dst;
         BranchProbability weight;
 
+        public:
+        
         Edge(RNode *s, RNode * d, BranchProbability w): src(s), dst(d), weight(w) {}
 
         bool operator<(const Edge &e) const {
@@ -683,10 +688,11 @@ class FusionRegAlloc : public MachineFunctionPass,
 
         //Fusion part
         span_e findSpanning(RNode*, RNode*);    
-        void fuzeRegions();
+        void fuzeRegions(RegisterClassInfo*, MachineRegisterInfo*);
         bool isSplitable(Span);
         void coalesceLiveRanges(span_e, RNode*);
-        void mergingCliques(RNode*);
+        void mergingCliques(RNode*,RegisterClassInfo*, MachineRegisterInfo*);
+        INode* chooseNodeToSpill(RNode*);
 };
 
 //------------------------------------------------------------------Implementation
@@ -880,7 +886,27 @@ FusionRegAlloc::span_e FusionRegAlloc::findSpanning(RNode *b1, RNode *b2) {
     return span;
 }
 
-void FusionRegAlloc::fuzeRegions() {
+// Apply a heuristic here later
+INode* FusionRegAlloc::chooseNodeToSpill(RNode *RN) {
+    for (auto it = RN->getInterferenceGraph()->begin(); it != RN->getInterferenceGraph()->end(); it++) {
+        if (!it->checkSpill()) return &*it;
+    }
+    return nullptr; //Bad, bad practice
+}
+
+// Planejamento errado, deveria ter o valor dos spills dentro da estrutura
+void FusionRegAlloc::mergingCliques(RNode *RN, RegisterClassInfo *RCI, MachineRegisterInfo *MRI) {
+    int necessarySpills = RN->getNecessarySpills(RCI, MRI);
+
+    if (necessarySpills > 0) {
+        for (int i=0; i < necessarySpills; i++) {
+            INode *IN = chooseNodeToSpill(RN);
+            IN->markAsSpilled();         
+        }
+    }
+}
+
+void FusionRegAlloc::fuzeRegions(RegisterClassInfo *RCI, MachineRegisterInfo *MRI) {
     RNode *RN;
     
     while (Queue.empty()) {
@@ -893,7 +919,7 @@ void FusionRegAlloc::fuzeRegions() {
 
         span_e span = findSpanning(e->getFrom(), e->getTo());
         coalesceLiveRanges(span, RN);
-        mergingCliques(RN);        
+        mergingCliques(RN, RCI, MRI);        
 
         Queue.pop();
     }
@@ -924,13 +950,7 @@ bool FusionRegAlloc::runOnMachineFunction(MachineFunction &mf) {
         node->buildInterferenceGraph(*LIS, *VRM);
     }
 
-    for (auto it = RGraph.begin(); it != RGraph.end(); it++) {
-        RNode *node = *it;
-        
-        outs() << "-> RNode#" << node->getNumber() << ": " << node->getNecessarySpills(&RCI, MRI) << "\n";
-    }
-
-    fuzeRegions();
+    fuzeRegions(&RCI, MRI);
     
     //For each virtual register
     //for (unsigned i=0, e = MRI->getNumVirtRegs(); i != e; ++i) {
