@@ -458,6 +458,8 @@ public:
 
     // Graph maintenance functions 
 
+
+    // Testing
     void removeGoldenInterval(GoldenInterval *GI) {
         for (auto it = GIntervals.begin(); it != GIntervals.end(); it++) {
             if (GI->reg == (*it)->reg)
@@ -465,6 +467,7 @@ public:
         }
     }
 
+    // Testing
     void addInterferenceNode(INode *node) {
         IGraph.push_back(*node);
         GIntervals.push_back(node->getGoldenInterval());
@@ -482,12 +485,24 @@ public:
     }
 
     // Add all INodes from another region IGraph
-    void addAllNodes(RNode *src) {
+    void addAllInterferenceNodes(RNode *src) {
         InterferenceGraph *IG = src->getInterferenceGraph();
 
         for (auto it = IG->begin(); it != IG->end(); it++) {
             addInterferenceNode(&*it);
         } 
+    }
+
+    // Dont remove the src node
+    void replaceEdge(INode *src, INode *dst) {
+        for (auto it = IGraph.begin(); it != IGraph.end(); it++) {
+            for (auto ti = it->begin(); ti != it->end(); it++) {
+                if (*ti == src) {
+                    it->removeNeighbor(*ti);
+                    it->addNeighbor(dst);
+                }
+            }
+        }
     }
 
     void buildInterferenceGraph(LiveIntervals &LIS, VirtRegMap &VRM) {
@@ -671,6 +686,7 @@ class FusionRegAlloc : public MachineFunctionPass,
         void fuzeRegions();
         bool isSplitable(Span);
         void coalesceLiveRanges(span_e, RNode*);
+        void mergingCliques(RNode*);
 };
 
 //------------------------------------------------------------------Implementation
@@ -813,10 +829,6 @@ void FusionRegAlloc::coalesceLiveRanges(span_e span, RNode *RN) {
 
     for (auto it = span.begin(); it != span.end(); it++) {
         if (isSplitable(*it)) {
-
-            RN->removeInterferenceNode(it->from);
-            RN->removeInterferenceNode(it->to);
-
             GoldenInterval *GI = new GoldenInterval(it->from->getColor());
             
             // Unioning Two Live ranges
@@ -831,6 +843,12 @@ void FusionRegAlloc::coalesceLiveRanges(span_e span, RNode *RN) {
 
             // Propagating Attributes
             IN->markAsSpilled();
+
+            // Replacing wrong edges and removing the coalesced Nodes
+            RN->replaceEdge(it->from, IN);
+            RN->removeInterferenceNode(it->from);
+            RN->replaceEdge(it->from, IN);
+            RN->removeInterferenceNode(it->to);
 
             RN->addInterferenceNode(IN);
         } 
@@ -870,11 +888,12 @@ void FusionRegAlloc::fuzeRegions() {
 
         RN = new RNode(e->getFrom()->getNumber() + e->getTo()->getNumber());
         
-        RN->addAllNodes(e->getFrom());
-        RN->addAllNodes(e->getTo());
+        RN->addAllInterferenceNodes(e->getFrom());
+        RN->addAllInterferenceNodes(e->getTo());
 
-        span_e span =findSpanning(e->getFrom(), e->getTo());
+        span_e span = findSpanning(e->getFrom(), e->getTo());
         coalesceLiveRanges(span, RN);
+        mergingCliques(RN);        
 
         Queue.pop();
     }
