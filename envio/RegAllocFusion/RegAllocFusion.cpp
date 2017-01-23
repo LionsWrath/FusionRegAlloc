@@ -1,6 +1,9 @@
 //===------- RegAllocFusion.cpp - Fusion Based Register Allocator * C++ -*-===//
 //
-//                  Put names and shit like that here
+//                  Caio Henrique Segawa Tonetti RA 79064
+//                  Adriano Ferrari Cardoso RA 77274
+//                  Andrey Souto Maior RA: 78788 
+//                  Lucas Franco Bernardes RA: 80824
 //
 //===----------------------------------------------------------------------===//
 //
@@ -14,15 +17,15 @@
 //      - Fix the Interference Graph creation (Verify Regs)
 //      OK - Check how many live ranges must be spilled within each region
 //      - Graph Fusion
-//          - Begin Fusing the graphs in the EDGE order
-//          - Always maintain the simplificability
-//          - Return an unique Interference Graph
+//          OK - Begin Fusing the graphs in the EDGE order
+//          OK - Always maintain the simplificability
+//          OK - Return an unique Interference Graph
 //      - Transform our GI to LI 
 //      - Color Assignment
 //          - Choose a technique?
 //      - Code Insertion
-//      - Verify placement and removal of spilled nodes in IGraph
-//      - Adapt degree calculation to the spill
+//      OK - Verify placement and removal of spilled nodes in IGraph
+//      OK - Adapt degree calculation to the spill
 //
 //  Classes to take a look:
 //      - LiveRangeCalc.h       -> Compute Live Ranges from scratch
