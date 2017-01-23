@@ -237,6 +237,19 @@ public:
         return GI->overlaps(G);
     }
 
+    // Super Testing
+    void removeDuplicates() {
+
+        auto it = Neighbors.begin();
+        while (it != Neighbors.end()) {
+            if (Neighbors.count(*it) > 1) {
+                auto tmp_it = it;
+                it++;
+                Neighbors.erase(tmp_it);
+            } else it++;
+        }
+    }
+
     std::vector<unsigned> getAllPhysRegs(RegisterClassInfo *RCI, MachineRegisterInfo *MRI) {
         std::vector<unsigned> allPhysRegs;
 
@@ -366,6 +379,17 @@ public:
     // Remove Neighbor to NeighborList
     void removeNeighbor(RNode* Node) {
         RNeighbors.erase(Node);
+    }
+
+    // Remove all duplicates
+    void removeInterferenceEdges() {
+        for (auto it = IGraph.begin(); it != IGraph.end(); it++) {
+            it->removeDuplicates();
+        }
+    }
+
+    void commitInterferenceGraph(InterferenceGraph *IG) {
+        IGraph = *IG;
     }
 
     // Verify if exist a Interfering Node
@@ -696,6 +720,7 @@ class FusionRegAlloc : public MachineFunctionPass,
         void linkSuccessors();
         void sortEdges();
         void addRegion(MachineBasicBlock*);
+        void removeRegion(RNode*);
         RNode* getRegion(int);
         MachineBasicBlock* getMBB(int);
         void printRegionGraph(raw_ostream&);
@@ -710,8 +735,10 @@ class FusionRegAlloc : public MachineFunctionPass,
         RNode::InterferenceGraph createSnapshot(RNode*);
         void coalesceSplitableLiveRanges(span_e, RNode*, InterferenceGraphs*);
         RNode::InterferenceGraph maintainSimplifiability(RNode*, InterferenceGraphs*, 
-                RegisterClassInfo *RCI, MachineRegisterInfo *MRI); 
+                RegisterClassInfo*, MachineRegisterInfo*); 
         void removeAllRelatedEdges(RNode::InterferenceGraph*, INode*); 
+        void replaceRegionEdges(RNode*, RNode*);
+        void commitDecision(RNode*, RNode*, RNode*, RNode::InterferenceGraph*);
 };
 
 //------------------------------------------------------------------Implementation
@@ -796,6 +823,12 @@ RNode* FusionRegAlloc::getRegion(int Number) {
     return nullptr;
 }
 
+void FusionRegAlloc::removeRegion(RNode *RN) {
+    for (auto it = RGraph.begin(); it != RGraph.end(); it++) {
+        if (*it == RN) RGraph.erase(it);
+    }
+}
+
 MachineBasicBlock* FusionRegAlloc::getMBB(int Number) {
     for (auto it = MBBList.begin(); it != MBBList.end(); it++) {
         MachineBasicBlock *MBB = *it;
@@ -848,6 +881,32 @@ void FusionRegAlloc::sortEdges() {
 
 //-------------------------------------------------------------------------FUSION
 
+void FusionRegAlloc::replaceRegionEdges(RNode *src, RNode *dst) {
+    for (auto it = RGraph.begin(); it != RGraph.end(); it++) {
+        for (auto ti = (*it)->begin(); ti != (*it)->end(); ti++) {
+            if (*ti == src) {
+                (*it)->removeNeighbor(src);
+                (*it)->addNeighbor(dst);
+            }
+        }
+    }
+}
+
+void FusionRegAlloc::commitDecision(RNode *RN, RNode *RFrom, RNode *RTo, RNode::InterferenceGraph *snapshot) {
+    // Put snapshot on the RegionNode
+    RN->commitInterferenceGraph(snapshot);
+
+    // Update Edges
+    replaceRegionEdges(RFrom, RTo);
+
+    // Update Region Graph with the new node
+    removeRegion(RFrom);
+    removeRegion(RTo);
+
+    // Remove duplicated interference edges 
+    RN->removeInterferenceEdges(); 
+}
+
 //Considering as bidirectional edges
 void FusionRegAlloc::removeAllRelatedEdges(RNode::InterferenceGraph *IG, INode *IN) {
     for (auto it = IN->begin(); it != IN->end(); it++) {
@@ -895,6 +954,7 @@ RNode::InterferenceGraph FusionRegAlloc::createSnapshot(RNode *RN) {
     return snapshot;
 }
 
+// There are more possibilities in the table for this case
 void FusionRegAlloc::coalesceSplitableLiveRanges(span_e span, RNode *RN, InterferenceGraphs *snapshots) {
 
     snapshots->push_back(createSnapshot(RN));
@@ -922,6 +982,8 @@ void FusionRegAlloc::coalesceSplitableLiveRanges(span_e span, RNode *RN, Interfe
             RN->addInterferenceNode(IN);
 
             snapshots->push_back(createSnapshot(RN));
+
+
         } 
     }
    
@@ -1003,24 +1065,53 @@ void FusionRegAlloc::mergingCliques(RNode *RN, RegisterClassInfo *RCI, MachineRe
 }
 
 void FusionRegAlloc::fuzeRegions(RegisterClassInfo *RCI, MachineRegisterInfo *MRI) {
-    RNode *RN;
+    std::set<RNode*> regionsProcessed;
+    std::map<RNode*, RNode*> pointerMap;
+    RNode *RN, *RFrom, *RTo;
     
     while (Queue.empty()) {
         Edge *e = Queue.top();
 
-        RN = new RNode(e->getFrom()->getNumber() + e->getTo()->getNumber());
-        
-        RN->addAllInterferenceNodes(e->getFrom());
-        RN->addAllInterferenceNodes(e->getTo());
+        RFrom = e->getFrom();
+        RTo = e->getTo();
 
-        span_e span = findSpanning(e->getFrom(), e->getTo());
+        if (!regionsProcessed.count(RFrom) 
+                && !regionsProcessed.count(RTo)) {
+            if (pointerMap[RFrom] == pointerMap[RTo]) {
+                Queue.pop();
+                continue;
+            }
+        }
+       
+        if (!regionsProcessed.count(RFrom)) {
+            RFrom = pointerMap[RFrom];
+        }
+
+        if (!regionsProcessed.count(RTo)) {
+            RTo = pointerMap[RTo];
+        }
+
+        RN = new RNode(RFrom->getNumber() + RTo->getNumber());
+        
+        RN->addAllInterferenceNodes(RFrom);
+        RN->addAllInterferenceNodes(RTo);
+
+        span_e span = findSpanning(RFrom, RTo);
         coalesceLiveRanges(span, RN);
         mergingCliques(RN, RCI, MRI);        
 
         InterferenceGraphs snapshots;
         coalesceSplitableLiveRanges(span, RN, &snapshots);
 
-        maintainSimplifiability(RN, &snapshots, RCI, MRI);
+        RNode::InterferenceGraph finalSnapshot = maintainSimplifiability(RN, &snapshots, RCI, MRI);
+
+        commitDecision(RN, RFrom, RTo, &finalSnapshot);
+        
+        regionsProcessed.insert(RFrom);
+        regionsProcessed.insert(RTo);
+       
+        pointerMap[RFrom] = RN;
+        pointerMap[RTo] = RN;
 
         Queue.pop();
     }
